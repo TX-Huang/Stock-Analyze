@@ -1,0 +1,833 @@
+# ==========================================
+# Alpha Global v93.0 (Final UI Fix)
+# ==========================================
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+from google import genai
+from google.genai import types
+import json
+import time
+import os
+import re
+from datetime import datetime, timedelta, timezone
+import yfinance as yf
+import requests
+import graphviz
+import numpy as np
+from scipy.signal import argrelextrema
+
+# --- Config ---
+st.set_page_config(page_title="Alpha Global v93.0", layout="wide", page_icon="📈")
+GEMINI_MODEL = 'gemini-3-pro-preview' # 鎖定最穩定模型
+
+# --- Session State ---
+if 'data_cache' not in st.session_state: st.session_state.data_cache = {}
+if 'ai_reports' not in st.session_state: st.session_state.ai_reports = {}
+if 'market_mode' not in st.session_state: st.session_state.market_mode = "🇹🇼 台股 (TW)"
+if 'dynamic_name_map' not in st.session_state: st.session_state.dynamic_name_map = {}
+if 'view_mode' not in st.session_state: st.session_state.view_mode = "list"
+if 'single_stock_data' not in st.session_state: st.session_state.single_stock_data = None
+if 'current_source' not in st.session_state: st.session_state.current_source = "🗂️ 預設清單"
+if 'detected_themes' not in st.session_state: st.session_state.detected_themes = []
+if 'supply_chain_data' not in st.session_state: st.session_state.supply_chain_data = None
+
+if 'chart_settings' not in st.session_state:
+    st.session_state.chart_settings = {
+        "trendline": True, "support": True, "gaps": True, "log_scale": False,
+        "zigzag": False, "obv": True, "rectangle": True,
+        "patterns": True, "ghost_lines": True,
+        "volume_strict": True,
+        "rounding": True, "fan": True, "wedge": True, "broadening": True,
+        "diamond": True, "bbands": True, "macd": True, "kd": True
+    }
+
+# --- API Key ---
+st.sidebar.header("🔑 啟動金鑰")
+st.sidebar.info("中文搜尋需 API Key。代碼搜尋 (如 2330, NVDA) 可免填。")
+api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password")
+
+client = None
+if api_key:
+    try: client = genai.Client(api_key=api_key);
+    except Exception as e: st.sidebar.error(f"連線錯誤: {e}")
+
+# ==========================================
+# 1. Pure Pandas Indicator Functions
+# ==========================================
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    exp1 = df['Close'].ewm(span=fast, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    hist = macd - signal_line
+    return macd, signal_line, hist
+
+def calculate_bbands(df, length=20, std=2):
+    mavg = df['Close'].rolling(window=length).mean()
+    mstd = df['Close'].rolling(window=length).std()
+    upper = mavg + (mstd * std)
+    lower = mavg - (mstd * std)
+    return upper, lower
+
+def calculate_stoch(df, k_window=14, d_window=3):
+    low_min = df['Low'].rolling(window=k_window).min()
+    high_max = df['High'].rolling(window=k_window).max()
+    k = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+    d = k.rolling(window=d_window).mean()
+    return k, d
+
+def calculate_obv(df):
+    obv = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
+    return obv
+
+# ==========================================
+# 2. Helper Functions
+# ==========================================
+
+def custom_metric(label, value, delta=None):
+    delta_str = ""
+    if delta:
+        delta_str = f" {delta}"
+    st.markdown(f"**{label}**: {value} {delta_str}")
+
+def robust_json_extract(text):
+    try: return json.loads(text)
+    except: pass
+    try:
+        match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
+        if match: return json.loads(match.group(1))
+    except: pass
+    return None
+
+def validate_ticker(ticker, market):
+    ticker = str(ticker).strip().upper()
+    if "台股" in market:
+        if re.match(r'^\d{4,6}$', ticker): return True
+        if ticker.endswith(".TW") or ticker.endswith(".TWO"): return True
+        return False
+    else:
+        if re.match(r'^[A-Z]{1,6}$', ticker): return True
+        return False
+
+def get_default_sector_map_full(market):
+    if "台股" in market:
+        return {
+            "💾 記憶體": ["2408", "2344", "2337", "8299", "3260"],
+            "🤖 AI 伺服器": ["2317", "2382", "3231", "2356", "6669"],
+            "❄️ 散熱模組": ["3017", "3324", "2421", "3013"],
+            "🚢 航運": ["2603", "2609", "2615", "2606"],
+            "💎 權值股": ["2330", "2454", "3035", "3443"]
+        }
+    else:
+        return {"👑 Mag 7": ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA"]}
+
+def get_fallback_supply_chain(keyword, market):
+    k = keyword.lower()
+    if "台股" in market:
+        if "記憶體" in k or "dram" in k:
+            return {"IC設計": {"3006":"晶豪科", "8299":"群聯"}, "製造": {"2408":"南亞科", "2344":"華邦電"}, "封測": {"6239":"力成", "8150":"南茂"}}
+        if "機器人" in k or "robot" in k:
+            return {"關鍵零組件": {"2049":"上銀", "1590":"亞德客"}, "系統整合": {"2317":"鴻海", "2357":"華碩"}}
+    return None
+
+# ==========================================
+# 3. AI Core
+# ==========================================
+def resolve_ticker_and_market(query):
+    query = str(query).strip()
+    if re.match(r'^\d{4,6}$', query): return query, "🇹🇼 台股 (TW)", query
+    if re.match(r'^[A-Z]{1,5}$', query.upper()): return query.upper(), "🗽 美股 (US)", query.upper()
+
+    if not client: return None, None, None
+    prompt = f"將'{query}'轉為股票代碼。回傳JSON:{{'market':'TW'或'US', 'ticker':'代碼', 'name':'中文名'}}。台股代碼僅數字。"
+    try:
+        res = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        data = robust_json_extract(res.text)
+        if data and 'market' in data: return data['ticker'], "🇹🇼 台股 (TW)" if data['market'] == "TW" else "🗽 美股 (US)", data.get('name', query)
+        return None, None, None
+    except Exception as e:
+        st.sidebar.error(f"AI 翻譯失敗: {e}")
+        return None, None, None
+
+def analyze_signals(df):
+    if df.empty or len(df) < 30: return "資料不足"
+    signals = []
+
+    price_slope = (df['Close'].iloc[-1] - df['Close'].iloc[-10])
+    rsi_slope = (df['RSI'].iloc[-1] - df['RSI'].iloc[-10])
+    if price_slope > 0 and rsi_slope < 0: signals.append("⚠️ 頂背離")
+    elif price_slope < 0 and rsi_slope > 0: signals.append("✨ 底背離")
+
+    k, d = df['K'].iloc[-1], df['D'].iloc[-1]
+    prev_k = df['K'].iloc[-2]
+    if prev_k < df['D'].iloc[-2] and k > d and k < 80: signals.append("⚡ KD 金叉")
+    elif prev_k > df['D'].iloc[-2] and k < d and k > 20: signals.append("💀 KD 死叉")
+
+    macd = df['MACD'].iloc[-1]
+    if df['MACD'].iloc[-2] < 0 and macd > 0: signals.append("🔥 MACD 翻紅")
+    elif df['MACD'].iloc[-2] > 0 and macd < 0: signals.append("❄️ MACD 翻綠")
+
+    return " | ".join(signals) if signals else "無明顯訊號"
+
+def detect_hot_themes(market):
+    if not client: return []
+    q = "今日台股熱門族群" if "台股" in market else "Top US sectors today"
+    prompt = f"搜'{q}'，歸納3~5個主題，回傳List JSON (純文字列表)。"
+    try:
+        res = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return robust_json_extract(res.text) or []
+    except: return []
+
+def generate_supply_chain_structure(market, keyword):
+    if not client: return None
+    prompt = f"拆解'{keyword}'產業鏈，回傳JSON: {{'部位': {{'代碼': '中文名'}}}}"
+    try:
+        res = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return robust_json_extract(res.text)
+    except: return None
+
+def generate_ai_analysis(market, ticker, name, price, change, sector, technicals, strategy, extra_data="", timeframe="1d", signal_context=""):
+    if not client: return "請先輸入 API Key。"
+    desc = "週線(Weekly)" if timeframe == "1wk" else "日線(Daily)"
+    prompt = f"""
+    角色：全方位技術分析大師。標的：{market} {ticker} {name}。
+    分析週期：{desc}。數據：{price} ({change}%) | {technicals}
+    **重點訊號：{signal_context}**
+    {extra_data}
+
+    請進行分析 (Markdown)：
+    1. 🔍 訊號判讀
+    2. 📐 形態與趨勢
+    3. 🛡️ 實戰指令 ({strategy})
+    """
+    try:
+        res = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return res.text
+    except Exception as e: return f"分析失敗: {e}"
+
+# ==========================================
+# 4. Logic Engines
+# ==========================================
+def detect_complex_patterns(df, peaks, troughs):
+    patterns = []
+    if df.empty or len(peaks) < 2: return patterns
+
+    if len(peaks) >= 3 and len(troughs) >= 3:
+        p1, p2, p3 = peaks.iloc[-3], peaks.iloc[-2], peaks.iloc[-1]
+        t1, t2, t3 = troughs.iloc[-3], troughs.iloc[-2], troughs.iloc[-1]
+        if (p2 > p1 and p2 > p3) and (t2 < t1 and t2 < t3):
+            patterns.append({"name": "💎 鑽石頂", "points": [peaks.index[-3], peaks.index[-1]], "type": "Bearish", "is_broadening": False})
+
+    if len(peaks) >= 2 and len(troughs) >= 2:
+        p1, p2 = peaks.iloc[-2], peaks.iloc[-1]
+        t1, t2 = troughs.iloc[-2], troughs.iloc[-1]
+        p1_idx, p2_idx = peaks.index[-2], peaks.index[-1]
+        t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]
+        if p2 > p1 and t2 < t1:
+            patterns.append({
+                "name": "🎺 擴散", "points": [p1_idx, p2_idx], "type": "Volatility", "is_broadening": True,
+                "p_coords": [(p1_idx, p1), (p2_idx, p2)], "t_coords": [(t1_idx, t1), (t2_idx, t2)]
+            })
+
+    if len(peaks) >= 3:
+        p1, p2, p3 = peaks.iloc[-3], peaks.iloc[-2], peaks.iloc[-1]
+        p1_idx, p2_idx, p3_idx = peaks.index[-3], peaks.index[-2], peaks.index[-1]
+        if p2 > p1 and p2 > p3 and abs(p1 - p3) / p1 < 0.15:
+            patterns.append({"name": "頭肩頂", "points": [p1_idx, p2_idx, p3_idx], "type": "Bearish", "is_broadening": False})
+
+    if len(peaks) >= 2:
+        p1, p2 = peaks.iloc[-2], peaks.iloc[-1]
+        p1_idx, p2_idx = peaks.index[-2], peaks.index[-1]
+        if abs(p1 - p2) / p1 < 0.03 and (p2_idx - p1_idx).days > 10:
+            patterns.append({"name": "M頭", "points": [p1_idx, p2_idx], "type": "Bearish", "is_broadening": False})
+
+    if len(troughs) >= 2:
+        t1, t2 = troughs.iloc[-2], troughs.iloc[-1]
+        t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]
+        if abs(t1 - t2) / t1 < 0.03 and (t2_idx - t1_idx).days > 10:
+            patterns.append({"name": "W底", "points": [t1_idx, t2_idx], "type": "Bullish", "is_broadening": False})
+
+    return patterns
+
+def calculate_trend_logic(df, n=10, is_weekly=False):
+    verdict = {"trend": "盤整/不明", "signal": "觀望", "color": "gray", "details": [], "is_box": False}
+    if df.empty: return verdict
+
+    df['peaks'] = df.iloc[argrelextrema(df.Close.values, np.greater_equal, order=n)[0]]['Close']
+    df['troughs'] = df.iloc[argrelextrema(df.Close.values, np.less_equal, order=n)[0]]['Close']
+    peaks, troughs = df['peaks'].dropna(), df['troughs'].dropna()
+
+    volatility = df['Close'].rolling(5).std() / df['Close']
+    if volatility.iloc[-1] < 0.005:
+        verdict["trend"] = "🌀 線圈狀態"; verdict["color"] = "orange"; verdict["details"].append("波動率極度壓縮")
+
+    recent = df.tail(40)
+    r_max, r_min = recent['High'].max(), recent['Low'].min()
+    if (r_max - r_min) / r_min < 0.10:
+        verdict["trend"] = "📦 矩形整理"; verdict["color"] = "blue"; verdict["is_box"] = True
+        if df['Close'].iloc[-1] > r_max * 1.01: verdict["signal"] = "🚀 箱型突破"; verdict["color"] = "green"
+        return verdict
+
+    if len(peaks) >= 2 and len(troughs) >= 2:
+        p_last, p_prev = peaks.iloc[-1], peaks.iloc[-2]
+        t_last, t_prev = troughs.iloc[-1], troughs.iloc[-2]
+
+        x_p1, x_p2 = df.index.get_loc(peaks.index[-2]), df.index.get_loc(peaks.index[-1])
+        x_t1, x_t2 = df.index.get_loc(troughs.index[-2]), df.index.get_loc(troughs.index[-1])
+
+        if x_p2 != x_p1 and x_t2 != x_t1:
+            m_peak = (p_last - p_prev) / (x_p2 - x_p1)
+            m_trough = (t_last - t_prev) / (x_t2 - x_t1)
+
+            if p_last > p_prev and t_last > t_prev:
+                if m_trough > m_peak * 1.2: verdict["trend"] = "⚠️ 上升楔形"; verdict["color"] = "red"
+                else: verdict["trend"] = "🟢 多頭趨勢"; verdict["color"] = "green"
+            elif p_last < p_prev and t_last < t_prev:
+                if m_peak < m_trough * 1.2: verdict["trend"] = "✨ 下降楔形"; verdict["color"] = "green"
+                else: verdict["trend"] = "🔴 空頭趨勢"; verdict["color"] = "red"
+            elif p_last < p_prev and t_last > t_prev: verdict["trend"] = "📐 收斂整理"; verdict["color"] = "orange"
+            elif p_last > p_prev and t_last < t_prev: verdict["trend"] = "🎺 擴散型態"; verdict["color"] = "orange"
+
+    return verdict
+
+# ==========================================
+# 5. Data Scanners (Robust + Fixed Columns)
+# ==========================================
+def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_name=""):
+    if timeframe == "1wk": interval = "1wk"; period = "5y"; is_weekly = True
+    else: interval = "1d"; period = "2y"; is_weekly = False
+
+    if "台股" in market: suffixes = [".TW", ".TWO"]; ma_short, ma_long = 5, 20
+    else: suffixes = [""]; ma_short, ma_long = 20, 50
+
+    stock = None; df = pd.DataFrame(); final_full_t = ""
+
+    for suffix in suffixes:
+        try_t = f"{ticker}{suffix}" if str(ticker).endswith(suffix) == False and suffix != "" else ticker
+        try:
+            print(f"嘗試抓取: {try_t}")
+            d = yf.download(try_t, period=period, interval=interval, progress=False, auto_adjust=False)
+
+            if not d.empty:
+                if isinstance(d.columns, pd.MultiIndex):
+                    d.columns = d.columns.get_level_values(0)
+
+                if 'Close' in d.columns and len(d) > 30:
+                    stock = yf.Ticker(try_t)
+                    df = d; final_full_t = try_t; print("成功!"); break
+        except Exception as e: print(f"錯誤: {e}"); continue
+
+    if df.empty: return None
+    try:
+        close = df['Close'].iloc[-1]; chg = ((close - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
+        vol_curr = df['Volume'].iloc[-1]; vol_avg = df['Volume'].iloc[:-5].mean()
+        r_vol = vol_curr / vol_avg if vol_avg > 0 else 0
+        ma_s = df['Close'].rolling(ma_short).mean().iloc[-1]
+        ma_l = df['Close'].rolling(ma_long).mean().iloc[-1]
+
+        df['RSI'] = calculate_rsi(df['Close'])
+        df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = calculate_macd(df)
+        df['BB_Upper'], df['BB_Lower'] = calculate_bbands(df)
+        df['K'], df['D'] = calculate_stoch(df)
+        df['OBV'] = calculate_obv(df)
+
+        signal_str = analyze_signals(df)
+
+        name = st.session_state.dynamic_name_map.get(ticker, ticker)
+        try:
+            info = stock.info
+            name = info.get('longName', name)
+            pe = info.get('trailingPE', 'N/A')
+            eps = info.get('trailingEps', 'N/A')
+            dy = info.get('dividendYield', None)
+            if dy is not None: div_yield = f"{dy*100:.2f}%"
+            else: div_yield = "N/A"
+        except:
+            pe, eps, div_yield = 'N/A', 'N/A', 'N/A'
+
+        if name == ticker and user_query_name: name = user_query_name
+
+        verdict = calculate_trend_logic(df, is_weekly=is_weekly)
+        patterns = detect_complex_patterns(df, df['peaks'].dropna(), df['troughs'].dropna())
+
+        # [Fix]: Define extra safely
+        extra = f"趨勢: {verdict.get('trend')}。{verdict.get('signal')}。"
+        if patterns: extra += f" 型態: {', '.join([p['name'] for p in patterns])}。"
+
+        tech_summary = f"RSI:{round(df['RSI'].iloc[-1],1)} MACD:{'多' if df['MACD'].iloc[-1]>0 else '空'}"
+
+        return {
+            "代碼": ticker, "名稱": name, "全名": final_full_t,
+            "現價": round(close, 2), "漲跌幅%": round(chg, 2), "爆量倍數": round(r_vol, 1),
+            "短均": round(ma_s, 1), "長均": round(ma_l, 1), "RSI": round(df['RSI'].iloc[-1], 1),
+            "PE": pe, "EPS": eps, "Yield": div_yield,
+            "df": df, "verdict": verdict, "extra_info": extra + " " + tech_summary,
+            "patterns": patterns, "signal_context": signal_str
+        }
+    except Exception as e:
+        print(f"數據處理錯誤: {e}")
+        return None
+
+def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
+    if timeframe == "1wk": interval = "1wk"; period = "5y"; is_weekly = True
+    else: interval = "1d"; period = "2y"; is_weekly = False
+
+    if "台股" in market: suffixes = [".TW", ".TWO"]; ma_short, ma_long = 5, 20
+    else: suffixes = [""]; ma_short, ma_long = 20, 50
+
+    all_data = []
+    unique_tickers = []
+    ticker_to_sector = {}
+
+    for sec, tickers in sector_map.items():
+        if isinstance(tickers, dict): st.session_state.dynamic_name_map.update(tickers); ticker_list = list(tickers.keys())
+        else: ticker_list = tickers
+        for t in ticker_list:
+            if validate_ticker(t, market) and t not in unique_tickers: unique_tickers.append(t); ticker_to_sector[t] = sec
+
+    progress = st.progress(0); st_text = st.empty()
+    for i, t in enumerate(unique_tickers):
+        st_text.text(f"掃描中: {t}..."); progress.progress((i+1)/len(unique_tickers))
+        stock = None; df = pd.DataFrame(); final_t = t
+        for suf in suffixes:
+            try_t = f"{t}{suf}" if str(t).endswith(suf) == False and suf != "" else t
+            try:
+                d = yf.download(try_t, period=period, interval=interval, progress=False, auto_adjust=False)
+                if not d.empty:
+                    if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
+                    if 'Close' in d.columns and len(d) > 30:
+                        stock = yf.Ticker(try_t); df = d; final_t = try_t; break
+            except: continue
+        if df.empty: continue
+        try:
+            close = df['Close'].iloc[-1]; chg = ((close - df['Close'].iloc[-2])/df['Close'].iloc[-2])*100
+            ma_s = df['Close'].rolling(ma_short).mean().iloc[-1]; ma_l = df['Close'].rolling(ma_long).mean().iloc[-1]
+
+            df['RSI'] = calculate_rsi(df['Close'])
+            df['MACD'], _, _ = calculate_macd(df)
+            df['K'], df['D'] = calculate_stoch(df)
+            df['BB_Upper'], df['BB_Lower'] = calculate_bbands(df)
+
+            verdict = calculate_trend_logic(df, is_weekly=is_weekly)
+            clean = t.replace(".TW","").replace(".TWO","")
+            patterns = detect_complex_patterns(df, df['peaks'].dropna(), df['troughs'].dropna())
+            signal_str = analyze_signals(df)
+
+            all_data.append({
+                "代碼": clean, "名稱": st.session_state.dynamic_name_map.get(clean, clean), "族群": ticker_to_sector.get(t, "其他"),
+                "現價": round(close, 2), "漲跌幅%": round(chg, 2), "爆量倍數": 0, "趨勢": verdict['trend'].split(" ")[0],
+                "短均": round(ma_s, 1), "長均": round(ma_l, 1), "RSI": round(df['RSI'].iloc[-1], 1), "t_color": "#f3f4f6", "t_border": "#9ca3af", "raw_ticker": final_t, "df": df,
+                "patterns": patterns, "verdict": verdict, "signal_context": signal_str
+            })
+        except: continue
+    progress.empty(); st_text.empty()
+    return pd.DataFrame(all_data)
+
+# ==========================================
+# 6. Visualization & Main UI
+# ==========================================
+def render_supply_chain_graph(keyword, structure, market):
+    if not structure: return
+    try:
+        dot = graphviz.Digraph(comment=keyword)
+        dot.attr(rankdir='LR')
+        dot.attr('node', fontname='Noto Sans CJK TC')
+        dot.node('ROOT', keyword, shape='doubleoctagon', style='filled', fillcolor='#f3f4f6', fontcolor='#111827', fontsize='16')
+        for part, tickers in structure.items():
+            part_id = f"PART_{part}"
+            dot.node(part_id, part, shape='box', style='filled', fillcolor='#dbeafe', fontcolor='#1e40af')
+            dot.edge('ROOT', part_id)
+            ticker_iter = tickers.items() if isinstance(tickers, dict) else [(t, t) for t in tickers]
+            for t, t_name in ticker_iter:
+                if not validate_ticker(t, market): continue
+                t_clean = t.replace(".TW","").replace(".TWO","")
+                name = t_name if t_name != t else st.session_state.dynamic_name_map.get(t_clean, t_clean)
+                stock_label = f"{name}\n({t_clean})"
+                stock_id = f"STOCK_{t_clean}"
+                dot.node(stock_id, stock_label, shape='ellipse', style='filled', fillcolor='#f9fafb', fontcolor='#374151')
+                dot.edge(part_id, stock_id)
+        st.graphviz_chart(dot)
+    except Exception as e:
+        st.warning("⚠️ 無法繪製供應鏈圖 (可能是電腦未安裝 Graphviz 軟體)，改為顯示文字清單：")
+        st.write(structure)
+
+def render_trend_chart(df, patterns, market, is_box=False, height=900, is_weekly=False):
+    try:
+        rows = 4
+        if "台股" in market: ma_s='MA5'; ma_l='MA20'; s_win=5; l_win=20
+        else: ma_s='MA20'; ma_l='MA50'; s_win=20; l_win=50
+        df[ma_s] = df['Close'].rolling(s_win).mean()
+        df[ma_l] = df['Close'].rolling(l_win).mean()
+
+        n = 10
+        df['peaks'] = df.iloc[argrelextrema(df.Close.values, np.greater_equal, order=n)[0]]['Close']
+        df['troughs'] = df.iloc[argrelextrema(df.Close.values, np.less_equal, order=n)[0]]['Close']
+        if st.session_state.chart_settings['obv']: df['OBV'] = calculate_obv(df)
+
+        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.55, 0.15, 0.15, 0.15], subplot_titles=("價格與型態", "成交量", "MACD", "KD"))
+
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#ef4444', decreasing_line_color='#22c55e'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df[ma_s], line=dict(color='orange', width=1), name=f'{ma_s}'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df[ma_l], line=dict(color='blue', width=1), name=f'{ma_l}'), row=1, col=1)
+
+        if st.session_state.chart_settings['bbands'] and 'BB_Upper' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='gray', width=1, dash='dot'), name='BB上軌'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='gray', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(200,200,200,0.1)', name='BB下軌'), row=1, col=1)
+
+        y_min = df['Low'].min() * 0.95; y_max = df['High'].max() * 1.05
+        # [CRITICAL UI FIX]: Add top margin (t=40) to prevent title cutoff
+        fig.update_yaxes(range=[y_min, y_max], fixedrange=False, row=1, col=1)
+        if st.session_state.chart_settings['log_scale']:
+            fig.update_yaxes(type='log', range=[np.log10(y_min), np.log10(y_max)], row=1, col=1)
+
+        is_broadening = any(p.get('is_broadening') for p in patterns)
+        peaks, troughs = df['peaks'].dropna(), df['troughs'].dropna()
+
+        if is_box and st.session_state.chart_settings['rectangle']:
+            recent = df.tail(40); r_max, r_min = recent['High'].max(), recent['Low'].min()
+            fig.add_shape(type="rect", x0=recent.index[0], x1=recent.index[-1], y0=r_min, y1=r_max, line=dict(color="RoyalBlue", width=2, dash="dash"), fillcolor="rgba(65, 105, 225, 0.1)", row=1, col=1)
+            fig.add_annotation(x=recent.index[int(len(recent)/2)], y=r_max, text="📦 Box", showarrow=False, yshift=10, row=1, col=1)
+
+        elif is_broadening and st.session_state.chart_settings['broadening']:
+            for pat in patterns:
+                if pat.get('is_broadening'):
+                    p1_idx, p1_val = pat['p_coords'][0]; p2_idx, p2_val = pat['p_coords'][1]
+                    x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
+                    if x2 != x1:
+                        slope_p = (p2_val - p1_val) / (x2 - x1); end_p = p2_val + slope_p*10
+                        if end_p < y_max * 2: fig.add_trace(go.Scatter(x=[p1_idx, df.index[-1]], y=[p1_val, end_p], mode='lines', line=dict(color="Red", width=2), name='擴散頂'), row=1, col=1)
+                        t1_idx, t1_val = pat['t_coords'][0]; t2_idx, t2_val = pat['t_coords'][1]
+                        x1, x2 = df.index.get_loc(t1_idx), df.index.get_loc(t2_idx)
+                        slope_t = (t2_val - t1_val) / (x2 - x1); end_t = t2_val + slope_t*10
+                        if end_t > y_min * 0.5: fig.add_trace(go.Scatter(x=[t1_idx, df.index[-1]], y=[t1_val, end_t], mode='lines', line=dict(color="Green", width=2), name='擴散底'), row=1, col=1)
+
+        elif st.session_state.chart_settings['trendline'] or st.session_state.chart_settings['wedge']:
+            if len(peaks) >= 2:
+                p1_idx, p2_idx = peaks.index[-2], peaks.index[-1]; p1_val, p2_val = peaks.iloc[-2], peaks.iloc[-1]
+                fig.add_trace(go.Scatter(x=[p1_idx, p2_idx], y=[p1_val, p2_val], mode='lines', line=dict(color="Red", width=1.5, dash="dash"), name='壓力線'), row=1, col=1)
+                if st.session_state.chart_settings['ghost_lines']:
+                    x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
+                    if x2 != x1:
+                        slope = (p2_val - p1_val) / (x2 - x1); proj = p2_val + slope * (len(df)-1 - x2)
+                        if df['Close'].iloc[-1] > proj and proj < y_max * 1.5: fig.add_trace(go.Scatter(x=[p2_idx, df.index[-1]], y=[p2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='支撐互換'), row=1, col=1)
+
+            if len(troughs) >= 2:
+                t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]; t1_val, t2_val = troughs.iloc[-2], troughs.iloc[-1]
+                fig.add_trace(go.Scatter(x=[t1_idx, t2_idx], y=[t1_val, t2_val], mode='lines', line=dict(color="Green", width=1.5, dash="dash"), name='支撐線'), row=1, col=1)
+
+        if st.session_state.chart_settings['patterns'] and patterns:
+            for pat in patterns:
+                end_date = pat['points'][-1]
+                fig.add_annotation(x=end_date, y=df.loc[end_date]['High'], text=pat['name'], showarrow=True, arrowhead=1, ax=0, ay=-30, font=dict(color="Blue", size=12, weight="bold"), row=1, col=1)
+
+        if st.session_state.chart_settings['rounding']:
+            lookback = 52 if is_weekly else 40; recent = df.tail(lookback)
+            if len(recent) == lookback:
+                x, y = np.arange(len(recent)), recent['Close'].values; coeffs = np.polyfit(x, y, 2)
+                r2 = 1 - (np.sum((y - np.poly1d(coeffs)(x))**2) / np.sum((y - np.mean(y))**2))
+                if r2 > 0.7:
+                    color = "Green" if coeffs[0] > 0 else "Red"
+                    fig.add_trace(go.Scatter(x=recent.index, y=np.poly1d(coeffs)(x), mode='lines', line=dict(color=color, width=2, dash='dot'), name='圓弧'), row=1, col=1)
+
+        colors = ['#ef4444' if row['Close'] >= row['Open'] else '#22c55e' for index, row in df.iterrows()]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=2, col=1)
+        if st.session_state.chart_settings['obv'] and 'OBV' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['OBV'], line=dict(color='purple', width=1.5), name='OBV'), row=2, col=1)
+
+        if st.session_state.chart_settings['macd'] and 'MACD' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#2962ff', width=1.5), name='MACD'), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line=dict(color='#ff6d00', width=1.5), name='Signal'), row=3, col=1)
+            colors_macd = ['#22c55e' if v >= 0 else '#ef4444' for v in df['MACD_Hist']]
+            fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], marker_color=colors_macd, name='Hist'), row=3, col=1)
+
+        if st.session_state.chart_settings['kd'] and 'K' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#2962ff', width=1.5), name='K'), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#ff6d00', width=1.5), name='D'), row=4, col=1)
+            fig.add_hline(y=80, line_dash="dot", line_color="gray", row=4, col=1)
+            fig.add_hline(y=20, line_dash="dot", line_color="gray", row=4, col=1)
+
+        fig.update_layout(height=height + (100 if rows==3 else 0), margin=dict(l=10, r=10, t=40, b=10), xaxis_rangeslider_visible=False, showlegend=True)
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e: st.error(f"繪圖錯誤: {e}")
+
+# ==========================================
+# 7. Main UI (Fixed Verdict Box)
+# ==========================================
+st.title(f"💎 Alpha Global v93.0 (UI Perfection)")
+
+with st.sidebar:
+    market_mode = st.radio("🌐 戰場狀態 (Auto)", ["🇹🇼 台股 (TW)", "🗽 美股 (US)"], index=0 if "台股" in st.session_state.market_mode else 1)
+    st.session_state.market_mode = market_mode
+
+    st.divider()
+    timeframe = st.radio("🕒 K線週期", ["1d (日線)", "1wk (週線)"], index=0)
+    tf_code = "1wk" if "週線" in timeframe else "1d"
+    is_weekly = (tf_code == "1wk")
+
+    strategy_mode = st.radio("⚔️ 交易風格", ["🔥 順勢突破 (Momentum)", "🛡️ 拉回抄底 (Dip Buy)"])
+
+    st.divider()
+    st.markdown("### ⚖️ 判官工具箱")
+    c1, c2 = st.columns(2)
+    st.session_state.chart_settings['trendline'] = c1.checkbox("趨勢線", value=True)
+    st.session_state.chart_settings['patterns'] = c2.checkbox("幾何型態", value=True)
+    c3, c4 = st.columns(2)
+    st.session_state.chart_settings['support'] = c3.checkbox("支撐壓力", value=True)
+    st.session_state.chart_settings['ghost_lines'] = c4.checkbox("鬼影線", value=True)
+    st.markdown("---")
+    st.session_state.chart_settings['volume_strict'] = st.checkbox("🔍 嚴格成交量", value=True)
+    st.session_state.chart_settings['rectangle'] = st.checkbox("矩形(Box)", value=True)
+    st.session_state.chart_settings['broadening'] = st.checkbox("擴散(喇叭)", value=True)
+    st.session_state.chart_settings['rounding'] = st.checkbox("圓弧頂底", value=True)
+    st.session_state.chart_settings['log_scale'] = st.checkbox("對數座標", value=False)
+    st.session_state.chart_settings['diamond'] = st.checkbox("鑽石型態", value=True)
+    st.session_state.chart_settings['wedge'] = st.checkbox("楔形判斷", value=True)
+    st.markdown("---")
+    st.session_state.chart_settings['bbands'] = st.checkbox("布林通道", value=True)
+    st.session_state.chart_settings['macd'] = st.checkbox("MACD", value=True)
+    st.session_state.chart_settings['kd'] = st.checkbox("KD 指標", value=True)
+    st.session_state.chart_settings['obv'] = st.checkbox("OBV 能量潮", value=True)
+
+    st.markdown("### 🧬 0. 策略回測實驗室")
+    finlab_token = st.text_input("Finlab API Token", type="password")
+    if st.button("🔬 執行回測"):
+        if not finlab_token:
+            st.error("請輸入 Finlab API Token")
+        else:
+            with st.spinner("正在執行量化策略回測..."):
+                try:
+                    # Import dynamically to avoid top-level dependency if not used
+                    import strategy
+                    report = strategy.run_strategy(finlab_token)
+
+                    st.success("回測完成！")
+
+                    # Visualize Equity Curve
+                    equity = report.creturn
+                    drawdown = report.drawdown
+
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                      subplot_titles=("權益曲線 (Equity Curve)", "最大回落 (Drawdown)"),
+                                      vertical_spacing=0.1)
+
+                    fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
+                                           mode='lines', name='Strategy Return',
+                                           line=dict(color='green', width=2)), row=1, col=1)
+
+                    fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
+                                           mode='lines', name='Drawdown',
+                                           line=dict(color='red', width=2), fill='tozeroy'), row=2, col=1)
+
+                    fig.update_layout(height=600, title_text="策略績效分析")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Display Metrics
+                    stats = report.stats()
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("CAGR (年化報酬)", f"{stats['cagr']*100:.2f}%")
+                    c2.metric("Max Drawdown", f"{stats['max_drawdown']*100:.2f}%")
+                    c3.metric("Sharpe Ratio", f"{stats['sharpe']:.2f}")
+                    c4.metric("Win Rate", f"{stats['win_rate']*100:.2f}%")
+
+                except Exception as e:
+                    st.error(f"回測失敗: {e}")
+
+    st.markdown("### 🔎 1. 全市場狙擊")
+    single_input = st.text_input("輸入代碼/名稱 (如 凡甲, NVDA)", placeholder="Sniper Input...")
+    if st.button("🚀 分析個股"):
+        if not single_input: st.error("請輸入代碼")
+        else:
+            st.session_state.supply_chain_data = None
+            st.session_state.detected_themes = []
+            with st.spinner(f"正在鎖定目標 {single_input}..."):
+                if not api_key:
+                    if re.match(r'^\d{4,6}$', single_input):
+                        target_ticker = single_input; detected_market = "🇹🇼 台股 (TW)"; target_name = single_input
+                    elif re.match(r'^[A-Z]{1,5}$', single_input.upper()):
+                        target_ticker = single_input.upper(); detected_market = "🗽 美股 (US)"; target_name = single_input.upper()
+                    else:
+                        st.error("⚠️ 請輸入 Gemini API Key 以啟用中文搜尋。或直接輸入代碼 (如 2330)。"); target_ticker=None
+                else:
+                    target_ticker, detected_market, target_name = resolve_ticker_and_market(single_input)
+
+                if target_ticker and detected_market:
+                    st.success(f"已識別: {target_name} ({target_ticker})")
+                    st.session_state.dynamic_name_map[target_ticker] = target_name
+                    st.session_state.market_mode = detected_market
+                    data = scan_single_stock_deep(detected_market, target_ticker, strategy_mode, timeframe=tf_code, user_query_name=target_name)
+                    if data:
+                        st.session_state.single_stock_data = data
+                        st.session_state.view_mode = "single"
+                        verdict = data.get('verdict', {})
+                        trend_msg = f"趨勢：{verdict.get('trend')}。{verdict.get('signal')}。"
+                        report = generate_ai_analysis(detected_market, target_ticker, data['名稱'], data['現價'], data['漲跌幅%'], "個股", data['extra_info'], strategy_mode, trend_msg, timeframe=tf_code, signal_context=data['signal_context'])
+                        st.session_state.ai_reports[f"SINGLE_{target_ticker}"] = report
+                        st.rerun()
+                    else: st.error("無法取得數據，請檢查代碼或網路")
+                else:
+                    if api_key: st.error("無法識別股票，請嘗試輸入代碼 (例如 2330)")
+
+    st.markdown("### 📡 2. 族群熱點掃描")
+    if st.button("🔥 掃描今日熱門話題"):
+        if not api_key: st.error("無 API Key")
+        else:
+            st.session_state.supply_chain_data = None
+            st.session_state.single_stock_data = None
+            with st.spinner("AI 正在閱讀新聞..."):
+                themes = detect_hot_themes(st.session_state.market_mode)
+                if themes:
+                    st.session_state.detected_themes = themes
+                    st.session_state.view_mode = "list"
+                    st.success("偵測完成！")
+                else: st.error("偵測失敗")
+
+    st.markdown("### ⛓️ 3. 產業鏈搜尋")
+    custom_input = st.text_input("輸入族群關鍵字:", placeholder="例: 記憶體, 機器人")
+    if st.button("✨ 繪製供應鏈圖"):
+        if custom_input:
+            st.session_state.single_stock_data = None
+            st.session_state.detected_themes = []
+            with st.spinner(f"AI 正在拆解「{custom_input}」供應鏈結構..."):
+                fallback = get_fallback_supply_chain(custom_input, st.session_state.market_mode)
+                if fallback:
+                    structure = fallback
+                    st.success(f"已啟用內建資料庫：{custom_input}")
+                else:
+                    structure = generate_supply_chain_structure(st.session_state.market_mode, custom_input)
+
+                if structure:
+                    st.session_state.supply_chain_data = {"keyword": custom_input, "structure": structure}
+                    df = scan_tickers_from_map(st.session_state.market_mode, structure, strategy_mode, timeframe=tf_code)
+                    st.session_state.data_cache[st.session_state.market_mode] = df
+                    st.session_state.current_source = f"⛓️ {custom_input} 供應鏈"
+                    st.session_state.view_mode = "list"
+                else: st.error("供應鏈拆解失敗")
+
+# === Main Display ===
+
+if st.session_state.view_mode == "single" and st.session_state.single_stock_data:
+    data = st.session_state.single_stock_data
+    verdict = data.get('verdict', {})
+    patterns = data.get('patterns', [])
+
+    st.button("🔙 返回列表模式", on_click=lambda: st.session_state.update({"view_mode": "list"}))
+    st.markdown(f"## 🎯 {data['代碼']} {data['名稱']} 個股戰情室 ({tf_code})")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: custom_metric("現價", data['現價'], f"{data['漲跌幅%']}%")
+    with c2: custom_metric("爆量", f"{data['爆量倍數']}x", None)
+    with c3: custom_metric("本益比", f"{data['PE']}", None)
+    with c4: custom_metric("EPS", f"{data['EPS']}", None)
+    with c5: custom_metric("殖利率 (Yield)", f"{data.get('Yield', 'N/A')}", None)
+
+    # [Native UI Fix]: Use Streamlit's native info/success/error box
+    trend_val = verdict.get('trend', '')
+    if '多' in trend_val or '上升' in trend_val:
+        status_box = st.success
+    elif '空' in trend_val or '下降' in trend_val:
+        status_box = st.error
+    else:
+        status_box = st.warning
+
+    with status_box(icon="⚖️", body=f"**程式判決：{trend_val}**"):
+        st.write(f"**訊號**：{verdict.get('signal')}")
+        if verdict.get('details'):
+            st.markdown("---")
+            for d in verdict.get('details'):
+                st.caption(f"• {d}")
+        st.markdown("---")
+        st.markdown(f"**⚡ 深度掃描**：{data.get('signal_context', '無')}")
+
+    render_trend_chart(data['df'], patterns, st.session_state.market_mode, is_box=verdict.get('is_box', False), height=900, is_weekly=is_weekly)
+
+    # AI Report Display
+    report_key = f"SINGLE_{data['代碼']}"
+    if report_key in st.session_state.ai_reports:
+        st.markdown("### 🦄 AI 深度評論")
+        st.markdown(f"<div class='ai-box'>{st.session_state.ai_reports[report_key]}</div>", unsafe_allow_html=True)
+
+else:
+    if st.session_state.detected_themes:
+        st.markdown("### 🔥 請點擊感興趣的主題：")
+        cols = st.columns(len(st.session_state.detected_themes))
+        for i, theme in enumerate(st.session_state.detected_themes):
+            safe_theme_label = str(theme)
+            if cols[i].button(safe_theme_label, use_container_width=True):
+                st.session_state.single_stock_data = None
+                with st.spinner(f"正在挖掘「{safe_theme_label}」供應鏈..."):
+                    structure = generate_supply_chain_structure(st.session_state.market_mode, safe_theme_label)
+                    if structure and isinstance(structure, dict):
+                        st.session_state.supply_chain_data = {"keyword": safe_theme_label, "structure": structure}
+                        df = scan_tickers_from_map(st.session_state.market_mode, structure, strategy_mode, timeframe=tf_code)
+                        st.session_state.data_cache[st.session_state.market_mode] = df
+                        st.session_state.current_source = f"🔥 {safe_theme_label}"
+                    else: st.error("AI 正在思考中，請再試一次或換個主題")
+    st.divider()
+
+    if st.button("🔙 回到預設清單 (全市場掃描)"):
+        st.session_state.supply_chain_data = None
+        st.session_state.single_stock_data = None
+        st.session_state.detected_themes = []
+        st.session_state.view_mode = "list"
+        with st.spinner("載入完整資料庫..."):
+            default_map = get_default_sector_map_full(st.session_state.market_mode)
+            df = scan_tickers_from_map(st.session_state.market_mode, default_map, strategy_mode, timeframe=tf_code)
+            st.session_state.data_cache[st.session_state.market_mode] = df
+            st.session_state.current_source = "🗂️ 預設清單"
+
+    if st.session_state.supply_chain_data:
+        st.markdown(f"## 🗺️ {st.session_state.supply_chain_data['keyword']} 產業供應鏈地圖")
+        render_supply_chain_graph(
+            st.session_state.supply_chain_data['keyword'],
+            st.session_state.supply_chain_data['structure'],
+            st.session_state.market_mode
+        )
+        st.divider()
+
+    current_df = st.session_state.data_cache.get(st.session_state.market_mode)
+    if current_df is not None and not current_df.empty:
+        st.subheader(f"{st.session_state.current_source} 數據掃描 ({tf_code})")
+        for idx, row in current_df.iterrows():
+            ticker = row['代碼']; name = row['名稱']
+            with st.expander(f"{ticker} {name} | {row['族群']} | {row['趨勢']}", expanded=(idx==0)):
+                c1, c2, c3, c4, c5 = st.columns(5)
+                with c1: custom_metric("現價", row['現價'], f"{row['漲跌幅%']}%")
+                with c2: custom_metric("爆量", f"{row['爆量倍數']}x", None)
+                with c3: custom_metric("短均", row['短均'], None)
+                with c4: custom_metric("長均", row['長均'], None)
+                with c5: custom_metric("RSI", row['RSI'], None)
+
+                verdict = row.get('verdict', {})
+                # Native UI for List View
+                trend_val = row['趨勢']
+                if '多' in trend_val or '上升' in trend_val: color = "green"
+                elif '空' in trend_val or '下降' in trend_val: color = "red"
+                else: color = "gray"
+
+                st.markdown(f":{color}-background[**⚖️ {trend_val}**] | {row.get('signal_context', '')}")
+
+                render_trend_chart(row['df'], row['patterns'], st.session_state.market_mode, is_box=row.get('verdict', {}).get('is_box', False), height=600, is_weekly=is_weekly)
+
+                cache_key = f"{st.session_state.market_mode}_{ticker}_{strategy_mode}"
+                if cache_key in st.session_state.ai_reports:
+                    st.markdown(f"<div class='ai-box'><strong>🦄 AI 分析：</strong><br>{st.session_state.ai_reports[cache_key]}</div>", unsafe_allow_html=True)
+                else:
+                    if st.button(f"🧠 AI 分析 {name}", key=f"btn_{ticker}"):
+                        with st.spinner("分析中..."):
+                            tech_str = f"短均{row['短均']}, 長均{row['長均']}, RSI{row['RSI']}"
+                            report = generate_ai_analysis(st.session_state.market_mode, ticker, name, row['現價'], row['漲跌幅%'], row['族群'], tech_str, strategy_mode, f"趨勢：{row['趨勢']}", timeframe=tf_code, signal_context=row.get('signal_context', ''))
+                            st.session_state.ai_reports[cache_key] = report
+                            st.rerun()
+    else:
+        if current_df is not None: st.warning("無符合資料。")
+        else: st.info("👈 請選擇側邊欄的搜尋方式開始。")
