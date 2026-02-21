@@ -600,15 +600,22 @@ with st.sidebar:
 
     st.markdown("### 🧬 0. 策略回測實驗室")
     finlab_token = st.text_input("Finlab API Token", type="password")
+
+    strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)"])
+
     if st.button("🔬 執行回測"):
         if not finlab_token:
             st.error("請輸入 Finlab API Token")
         else:
-            with st.spinner("正在執行量化策略回測..."):
+            with st.spinner(f"正在執行 {strategy_type} 回測..."):
                 try:
                     # Import dynamically to avoid top-level dependency if not used
-                    import strategy
-                    report = strategy.run_strategy(finlab_token)
+                    if "純做多" in strategy_type:
+                        import strategy_long
+                        report = strategy_long.run_long_strategy(finlab_token)
+                    else:
+                        import strategy_long_short
+                        report = strategy_long_short.run_long_short_strategy(finlab_token)
 
                     st.success("回測完成！")
 
