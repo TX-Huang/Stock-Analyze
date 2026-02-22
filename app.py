@@ -620,31 +620,61 @@ with st.sidebar:
                     st.success("回測完成！")
 
                     # Visualize Equity Curve
-                    equity = report.creturn
-                    drawdown = report.drawdown
+                    # Use 'creturn' if available directly, or check other attributes
+                    if hasattr(report, 'creturn'):
+                        equity = report.creturn
+                    elif hasattr(report, 'benchmark'): # Sometimes creturn is hidden but benchmark available? No.
+                         # Try getting stats and see if we can plot simply from trades?
+                         # Or just assume report.creturn exists for now based on inspection v3
+                         equity = getattr(report, 'creturn', None)
+                    else:
+                         equity = None
 
-                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                      subplot_titles=("權益曲線 (Equity Curve)", "最大回落 (Drawdown)"),
-                                      vertical_spacing=0.1)
+                    # Manually calculate drawdown if method not found
+                    if equity is not None:
+                        drawdown = equity / equity.cummax() - 1
+                    else:
+                        drawdown = None
 
-                    fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
-                                           mode='lines', name='Strategy Return',
-                                           line=dict(color='green', width=2)), row=1, col=1)
+                    # If equity is missing, try to get it from benchmark? No.
 
-                    fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
-                                           mode='lines', name='Drawdown',
-                                           line=dict(color='red', width=2), fill='tozeroy'), row=2, col=1)
+                    if equity is not None:
+                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                          subplot_titles=("權益曲線 (Equity Curve)", "最大回落 (Drawdown)"),
+                                          vertical_spacing=0.1)
 
-                    fig.update_layout(height=600, title_text="策略績效分析")
-                    st.plotly_chart(fig, use_container_width=True)
+                        fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
+                                               mode='lines', name='Strategy Return',
+                                               line=dict(color='green', width=2)), row=1, col=1)
+
+                        if hasattr(report, 'benchmark') and report.benchmark is not None:
+                             fig.add_trace(go.Scatter(x=report.benchmark.index, y=report.benchmark.values,
+                                               mode='lines', name='Benchmark',
+                                               line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+
+                        if drawdown is not None:
+                            fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
+                                                   mode='lines', name='Drawdown',
+                                                   line=dict(color='red', width=2), fill='tozeroy'), row=2, col=1)
+
+                        fig.update_layout(height=600, title_text="策略績效分析")
+                        st.plotly_chart(fig, use_container_width=True)
 
                     # Display Metrics
-                    stats = report.stats()
+                    stats = report.get_stats()
                     c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("CAGR (年化報酬)", f"{stats['cagr']*100:.2f}%")
-                    c2.metric("Max Drawdown", f"{stats['max_drawdown']*100:.2f}%")
-                    c3.metric("Sharpe Ratio", f"{stats['sharpe']:.2f}")
-                    c4.metric("Win Rate", f"{stats['win_rate']*100:.2f}%")
+                    c1.metric("CAGR (年化報酬)", f"{stats.get('cagr', 0)*100:.2f}%")
+                    c2.metric("Max Drawdown", f"{stats.get('max_drawdown', 0)*100:.2f}%")
+                    c3.metric("Sharpe Ratio", f"{stats.get('sharpe', 0):.2f}")
+                    c4.metric("Win Rate", f"{stats.get('win_rate', 0)*100:.2f}%")
+
+                    # Display Trades
+                    st.subheader("📋 最近交易紀錄")
+                    trades = report.get_trades()
+                    if not trades.empty:
+                        st.dataframe(trades.tail(50).sort_index(ascending=False), use_container_width=True)
+                    else:
+                        st.info("無交易紀錄")
 
                 except Exception as e:
                     st.error(f"回測失敗: {e}")
