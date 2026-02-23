@@ -601,7 +601,7 @@ with st.sidebar:
     st.markdown("### 🧬 0. 策略回測實驗室")
     finlab_token = st.text_input("Finlab API Token", type="password")
 
-    strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)"])
+    strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)"])
 
     if st.button("🔬 執行回測"):
         if not finlab_token:
@@ -613,6 +613,9 @@ with st.sidebar:
                     if "純做多" in strategy_type:
                         import strategy_long
                         report = strategy_long.run_long_strategy(finlab_token)
+                    elif "VCP" in strategy_type:
+                        import strategy_vcp
+                        report = strategy_vcp.run_vcp_strategy(finlab_token)
                     else:
                         import strategy_long_short
                         report = strategy_long_short.run_long_short_strategy(finlab_token)
