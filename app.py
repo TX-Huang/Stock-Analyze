@@ -23,6 +23,9 @@ from scipy.signal import argrelextrema
 st.set_page_config(page_title="Alpha Global v93.0", layout="wide", page_icon="📈")
 GEMINI_MODEL = 'gemini-3-pro-preview' # 鎖定最穩定模型
 
+# Fix Pandas Styler Limit
+pd.set_option("styler.render.max_elements", 1_000_000)
+
 # --- Session State ---
 if 'data_cache' not in st.session_state: st.session_state.data_cache = {}
 if 'ai_reports' not in st.session_state: st.session_state.ai_reports = {}
@@ -767,9 +770,16 @@ if app_mode == "🧬 量化回測系統":
                                     color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
                                 return color
 
-                            # Display
+                            # Display (Limit to recent 1000 trades to avoid performance issues)
+                            display_limit = 1000
+                            trades_final = trades_display[cols_to_show].sort_values("進場日期", ascending=False)
+
+                            if len(trades_final) > display_limit:
+                                st.warning(f"⚠️ 交易筆數過多 ({len(trades_final)} 筆)，僅顯示最近 {display_limit} 筆以優化效能。")
+                                trades_final = trades_final.head(display_limit)
+
                             st.dataframe(
-                                trades_display[cols_to_show].sort_values("進場日期", ascending=False).style.format({
+                                trades_final.style.format({
                                     '報酬率': '{:.2%}',
                                     '最大不利(MAE)': '{:.2%}',
                                     '最大有利(MFE)': '{:.2%}',
