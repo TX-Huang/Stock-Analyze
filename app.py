@@ -639,102 +639,154 @@ if app_mode == "🧬 量化回測系統":
 
                     st.success("回測完成！")
 
-                    # --- Visualization ---
+                    # === Data Preparation ===
 
-                    # 1. Equity & Drawdown
-                    if hasattr(report, 'creturn'):
-                        equity = report.creturn
-                    elif hasattr(report, 'benchmark'):
-                         equity = getattr(report, 'creturn', None)
-                    else:
-                         equity = None
+                    # 1. Equity & Benchmark
+                    equity = getattr(report, 'creturn', None)
+                    benchmark = getattr(report, 'benchmark', None)
 
+                    # Calculate Drawdown
+                    drawdown = None
                     if equity is not None:
                         drawdown = equity / equity.cummax() - 1
 
-                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                          subplot_titles=("資產權益曲線 (Equity Curve)", "資金回撤 (Drawdown)"),
-                                          vertical_spacing=0.1, row_heights=[0.7, 0.3])
-
-                        fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
-                                               mode='lines', name='策略報酬',
-                                               line=dict(color='#22c55e', width=2)), row=1, col=1)
-
-                        if hasattr(report, 'benchmark') and report.benchmark is not None:
-                             fig.add_trace(go.Scatter(x=report.benchmark.index, y=report.benchmark.values,
-                                               mode='lines', name='大盤基準',
-                                               line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
-
-                        if drawdown is not None:
-                            fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
-                                                   mode='lines', name='回撤幅度',
-                                                   line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
-
-                        fig.update_layout(height=700, title_text="策略績效分析")
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    # 2. Performance Metrics
-                    st.subheader("📊 策略績效指標")
-                    stats = report.get_stats()
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("年化報酬率 (CAGR)", f"{stats.get('cagr', 0)*100:.2f}%")
-                    c2.metric("最大回撤 (Max Drawdown)", f"{stats.get('max_drawdown', 0)*100:.2f}%")
-                    c3.metric("夏普比率 (Sharpe Ratio)", f"{stats.get('sharpe', 0):.2f}")
-                    c4.metric("勝率 (Win Rate)", f"{stats.get('win_rate', 0)*100:.2f}%")
-                    c5.metric("獲利因子 (Profit Factor)", f"{stats.get('profit_factor', 0):.2f}")
-
-                    # 3. Trade Log (Enhanced)
-                    st.subheader("📋 詳細交易紀錄 (Trade Log)")
+                    # 2. Trades & Stats
                     trades = report.get_trades()
+                    stats = report.get_stats()
 
-                    if not trades.empty:
-                        # Rename columns for clarity
-                        # Usually columns are: stock_id, entry_date, exit_date, entry_sig_date, exit_sig_date, entry_price, exit_price, return, mae, mfe...
-                        # Check columns first
-                        # st.write(trades.columns) # Debug
+                    # === Tab Layout ===
+                    tab1, tab2, tab3 = st.tabs(["📊 績效總覽 (Overview)", "📈 進階分析 (Analysis)", "📋 交易明細 (Trades)"])
 
-                        rename_map = {
-                            "stock_id": "股票代碼",
-                            "entry_date": "進場日期",
-                            "exit_date": "出場日期",
-                            "entry_price": "進場價",
-                            "exit_price": "出場價",
-                            "return": "報酬率",
-                            "mae": "最大不利(MAE)",
-                            "mfe": "最大有利(MFE)",
-                            "period": "持有天數"
-                        }
+                    with tab1:
+                        # Metrics Row
+                        c1, c2, c3, c4, c5 = st.columns(5)
+                        c1.metric("年化報酬率 (CAGR)", f"{stats.get('cagr', 0)*100:.2f}%")
+                        c2.metric("最大回撤 (Max Drawdown)", f"{stats.get('max_drawdown', 0)*100:.2f}%")
+                        c3.metric("夏普比率 (Sharpe)", f"{stats.get('sharpe', 0):.2f}")
+                        c4.metric("勝率 (Win Rate)", f"{stats.get('win_rate', 0)*100:.2f}%")
+                        c5.metric("獲利因子 (Profit Factor)", f"{stats.get('profit_factor', 0):.2f}")
 
-                        trades_display = trades.copy()
-                        trades_display.rename(columns=rename_map, inplace=True)
+                        # Charts
+                        if equity is not None:
+                            fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                              subplot_titles=("資產權益曲線 (Equity Curve)", "資金回撤 (Drawdown)"),
+                                              vertical_spacing=0.1, row_heights=[0.7, 0.3])
 
-                        # Format percentages
-                        if '報酬率' in trades_display.columns:
-                            trades_display['報酬率'] = trades_display['報酬率'].apply(lambda x: f"{x*100:.2f}%")
+                            fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
+                                                   mode='lines', name='策略報酬',
+                                                   line=dict(color='#22c55e', width=2)), row=1, col=1)
 
-                        # Select relevant columns to display
-                        cols_to_show = [c for c in ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數'] if c in trades_display.columns]
+                            if benchmark is not None:
+                                 fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
+                                                   mode='lines', name='大盤基準',
+                                                   line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
 
-                        # Show styled dataframe
-                        def highlight_ret(val):
-                            color = ''
-                            if isinstance(val, str) and '%' in val:
+                            if drawdown is not None:
+                                fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
+                                                       mode='lines', name='回撤幅度',
+                                                       line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
+
+                            fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10))
+                            st.plotly_chart(fig, use_container_width=True)
+
+                    with tab2:
+                        c1, c2 = st.columns(2)
+
+                        # 1. Monthly Returns Heatmap (Manual Calculation)
+                        if equity is not None:
+                            with c1:
+                                st.subheader("📅 月度報酬率 (Monthly Returns)")
                                 try:
-                                    v = float(val.replace('%', ''))
-                                    color = 'color: #22c55e' if v > 0 else 'color: #ef4444'
-                                except: pass
-                            return color
+                                    monthly_ret = equity.resample('M').last().pct_change().dropna()
+                                    monthly_ret_df = pd.DataFrame({'Year': monthly_ret.index.year, 'Month': monthly_ret.index.month, 'Return': monthly_ret.values})
+                                    pivot_ret = monthly_ret_df.pivot(index='Year', columns='Month', values='Return')
+                                    # Rename columns
+                                    pivot_ret.columns = [datetime(2000, m, 1).strftime('%b') for m in pivot_ret.columns]
 
-                        st.dataframe(
-                            trades_display[cols_to_show].sort_values("進場日期", ascending=False).style.map(highlight_ret, subset=['報酬率']),
-                            use_container_width=True,
-                            height=500
-                        )
-                    else:
-                        st.info("無交易紀錄")
+                                    # Heatmap using Plotly
+                                    fig_heat = px.imshow(pivot_ret,
+                                                       labels=dict(x="Month", y="Year", color="Return"),
+                                                       color_continuous_scale='RdYlGn',
+                                                       text_auto='.1%')
+                                    fig_heat.update_layout(height=400)
+                                    st.plotly_chart(fig_heat, use_container_width=True)
+                                except Exception as e:
+                                    st.warning(f"無法計算月度報酬: {e}")
+
+                        # 2. Return Distribution
+                        if not trades.empty and 'return' in trades.columns:
+                            with c2:
+                                st.subheader("📊 盈虧分佈 (Return Distribution)")
+                                fig_hist = px.histogram(trades, x='return', nbins=30,
+                                                      title="單筆交易報酬率分佈",
+                                                      labels={'return': '報酬率'},
+                                                      color_discrete_sequence=['#3b82f6'])
+                                fig_hist.update_layout(showlegend=False, height=400)
+                                st.plotly_chart(fig_hist, use_container_width=True)
+
+                                # Avg Win/Loss Stats
+                                avg_win = trades[trades['return'] > 0]['return'].mean()
+                                avg_loss = trades[trades['return'] <= 0]['return'].mean()
+                                win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+
+                                c2a, c2b, c2c = st.columns(3)
+                                c2a.metric("平均獲利", f"{avg_win*100:.2f}%")
+                                c2b.metric("平均虧損", f"{avg_loss*100:.2f}%")
+                                c2c.metric("盈虧比 (Win/Loss)", f"{win_loss_ratio:.2f}")
+
+                    with tab3:
+                        st.subheader("📋 詳細交易紀錄 (Trade Log)")
+                        if not trades.empty:
+                            rename_map = {
+                                "stock_id": "股票代碼",
+                                "entry_date": "進場日期",
+                                "exit_date": "出場日期",
+                                "entry_price": "進場價",
+                                "exit_price": "出場價",
+                                "return": "報酬率",
+                                "mae": "最大不利(MAE)",
+                                "mfe": "最大有利(MFE)",
+                                "period": "持有天數"
+                            }
+
+                            trades_display = trades.copy()
+                            trades_display.rename(columns=rename_map, inplace=True)
+
+                            # Ensure entry_date is datetime
+                            if '進場日期' in trades_display.columns:
+                                trades_display['進場日期'] = pd.to_datetime(trades_display['進場日期'])
+
+                            # Select relevant columns
+                            available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
+                            cols_to_show = [c for c in available_cols if c in trades_display.columns]
+
+                            # Formatting style function
+                            def highlight_ret(val):
+                                color = ''
+                                if isinstance(val, (int, float)):
+                                    color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
+                                return color
+
+                            # Display
+                            st.dataframe(
+                                trades_display[cols_to_show].sort_values("進場日期", ascending=False).style.format({
+                                    '報酬率': '{:.2%}',
+                                    '最大不利(MAE)': '{:.2%}',
+                                    '最大有利(MFE)': '{:.2%}',
+                                    '進場價': '{:.2f}',
+                                    '出場價': '{:.2f}'
+                                }).map(highlight_ret, subset=['報酬率']),
+                                use_container_width=True,
+                                height=600
+                            )
+                        else:
+                            st.info("無交易紀錄")
 
                 except Exception as e:
-                    st.error(f"回測失敗: {e}")
+                    st.error(f"回測執行發生錯誤: {e}")
+                    # Print traceback for debugging (optional, remove in prod)
+                    # import traceback
+                    # st.code(traceback.format_exc())
 
 # Only show original dashboard if in Dashboard Mode
 elif app_mode == "📈 股市戰情室":
