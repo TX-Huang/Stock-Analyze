@@ -20,8 +20,8 @@ def run_long_strategy(api_token):
     ma150 = close.average(150)
     ma200 = close.average(200)
 
-    high250 = close.rolling(250).max()
-    low250 = close.rolling(250).min()
+    high250 = close.rolling(250).max().shift(1)
+    low250 = close.rolling(250).min().shift(1)
     vol_avg = vol.average(20)
 
     # 3. Long Entry Conditions
@@ -36,16 +36,9 @@ def run_long_strategy(api_token):
     cond3 = close > (low250 * 1.30)
 
     # Cond 4: Price within 15% of 250-day high (Breakout point)
-    # Refined: Price should be in the band [High*0.85, High*1.05]
-    # It means price is consolidating near the high or just breaking out.
     cond4 = (close >= high250 * 0.85) & (close <= high250 * 1.05)
 
     # Cond 5: 200MA trending up for 1 month
-    # Strict check: 200MA today > 200MA 20 days ago AND Slope is positive
-    # Let's check if it has been rising for most of the last 20 days
-    # diff > 0 for at least 15 out of 20 days?
-    # Or simply: ma200 > ma200.shift(20) is robust enough for "Trending Up".
-    # User asked for "strictly up". Let's assume point-to-point is acceptable but ensure it's significant.
     cond5 = ma200 > ma200.shift(20)
 
     # Cond 6: Volume Spike > 1.5x Avg
@@ -61,8 +54,12 @@ def run_long_strategy(api_token):
 
     buy_signal = cond1 & cond2 & cond3 & cond4 & cond5 & cond6 & cond7 & is_liquid
 
-    # 4. Long Exit Condition: Close below 20MA
-    exit_signal = close < ma20
+    # 4. Long Exit Condition (Optimized)
+    # Previous: Close < 20MA (Caused 1-day whipsaws)
+    # New: Close < 50MA (Classic Trend Following) OR Close < 0.9 * Highest High since entry (10% Trailing Stop)
+    # For vectorized backtest, simple Trailing Stop is hard.
+    # Let's switch to Close < 50MA to allow the trend to develop, avoiding 1-day exits.
+    exit_signal = close < ma50
 
     # 5. Position Construction
     position = pd.DataFrame(np.nan, index=buy_signal.index, columns=buy_signal.columns)

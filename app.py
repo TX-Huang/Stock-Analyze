@@ -53,7 +53,11 @@ st.sidebar.header("🔑 啟動金鑰")
 app_mode = st.sidebar.radio("功能模組", ["📈 股市戰情室", "🧬 量化回測系統"])
 
 st.sidebar.info("中文搜尋需 API Key。代碼搜尋 (如 2330, NVDA) 可免填。")
-api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password", value="AIzaSyD9MytPig5KB6Xl4wyyRDGJZJee7p4vf3k")
+
+# [Security Note]: Defaults are hardcoded for user convenience in local dev.
+# In production, use .streamlit/secrets.toml or env vars.
+default_gemini = st.secrets.get("GEMINI_API_KEY", "AIzaSyD9MytPig5KB6Xl4wyyRDGJZJee7p4vf3k")
+api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password", value=default_gemini)
 
 client = None
 if api_key:
@@ -617,7 +621,9 @@ if app_mode == "🧬 量化回測系統":
     with st.expander("🛠️ 策略設定 (Strategy Settings)", expanded=True):
         col1, col2 = st.columns([1, 2])
         with col1:
-            finlab_token = st.text_input("Finlab API Token", type="password", value="KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m", help="請輸入您的 Finlab API 金鑰")
+            # [Security Note]: Defaults are hardcoded for user convenience in local dev.
+            default_finlab = st.secrets.get("FINLAB_API_TOKEN", "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m")
+            finlab_token = st.text_input("Finlab API Token", type="password", value=default_finlab, help="請輸入您的 Finlab API 金鑰")
         with col2:
             strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)"])
 
@@ -759,24 +765,44 @@ if app_mode == "🧬 量化回測系統":
                             if '進場日期' in trades_display.columns:
                                 trades_display['進場日期'] = pd.to_datetime(trades_display['進場日期'])
 
+                            # === Date Filter ===
+                            min_date = trades_display['進場日期'].min().date()
+                            max_date = trades_display['進場日期'].max().date()
+
+                            c_filter1, c_filter2 = st.columns(2)
+                            start_date = c_filter1.date_input("開始日期", value=max_date - timedelta(days=365), min_value=min_date, max_value=max_date)
+                            end_date = c_filter2.date_input("結束日期", value=max_date, min_value=min_date, max_value=max_date)
+
+                            # Filter Data
+                            trades_filtered = trades_display[
+                                (trades_display['進場日期'].dt.date >= start_date) &
+                                (trades_display['進場日期'].dt.date <= end_date)
+                            ]
+
+                            # === Pagination ===
+                            items_per_page = 1000
+                            total_items = len(trades_filtered)
+                            total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
+
+                            page = st.number_input("頁數 (Page)", min_value=1, max_value=total_pages, value=1)
+                            start_idx = (page - 1) * items_per_page
+                            end_idx = min(start_idx + items_per_page, total_items)
+
+                            st.info(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
+
                             # Select relevant columns
                             available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
-                            cols_to_show = [c for c in available_cols if c in trades_display.columns]
+                            cols_to_show = [c for c in available_cols if c in trades_filtered.columns]
+
+                            trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
 
                             # Formatting style function
                             def highlight_ret(val):
                                 color = ''
+                                if pd.isna(val): return ''
                                 if isinstance(val, (int, float)):
                                     color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
                                 return color
-
-                            # Display (Limit to recent 1000 trades to avoid performance issues)
-                            display_limit = 1000
-                            trades_final = trades_display[cols_to_show].sort_values("進場日期", ascending=False)
-
-                            if len(trades_final) > display_limit:
-                                st.warning(f"⚠️ 交易筆數過多 ({len(trades_final)} 筆)，僅顯示最近 {display_limit} 筆以優化效能。")
-                                trades_final = trades_final.head(display_limit)
 
                             st.dataframe(
                                 trades_final.style.format({
@@ -785,7 +811,7 @@ if app_mode == "🧬 量化回測系統":
                                     '最大有利(MFE)': '{:.2%}',
                                     '進場價': '{:.2f}',
                                     '出場價': '{:.2f}'
-                                }).map(highlight_ret, subset=['報酬率']),
+                                }, na_rep="N/A").map(highlight_ret, subset=['報酬率']),
                                 use_container_width=True,
                                 height=600
                             )
