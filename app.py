@@ -50,7 +50,7 @@ st.sidebar.header("🔑 啟動金鑰")
 app_mode = st.sidebar.radio("功能模組", ["📈 股市戰情室", "🧬 量化回測系統"])
 
 st.sidebar.info("中文搜尋需 API Key。代碼搜尋 (如 2330, NVDA) 可免填。")
-api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password")
+api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password", value="AIzaSyD9MytPig5KB6Xl4wyyRDGJZJee7p4vf3k")
 
 client = None
 if api_key:
@@ -614,7 +614,7 @@ if app_mode == "🧬 量化回測系統":
     with st.expander("🛠️ 策略設定 (Strategy Settings)", expanded=True):
         col1, col2 = st.columns([1, 2])
         with col1:
-            finlab_token = st.text_input("Finlab API Token", type="password", help="請輸入您的 Finlab API 金鑰")
+            finlab_token = st.text_input("Finlab API Token", type="password", value="KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m", help="請輸入您的 Finlab API 金鑰")
         with col2:
             strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)"])
 
