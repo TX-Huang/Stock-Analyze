@@ -46,6 +46,9 @@ if 'chart_settings' not in st.session_state:
 
 # --- API Key ---
 st.sidebar.header("🔑 啟動金鑰")
+# Sidebar Navigation
+app_mode = st.sidebar.radio("功能模組", ["📈 股市戰情室", "🧬 量化回測系統"])
+
 st.sidebar.info("中文搜尋需 API Key。代碼搜尋 (如 2330, NVDA) 可免填。")
 api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password")
 
@@ -566,48 +569,62 @@ def render_trend_chart(df, patterns, market, is_box=False, height=900, is_weekly
 st.title(f"💎 Alpha Global v93.0 (UI Perfection)")
 
 with st.sidebar:
-    market_mode = st.radio("🌐 戰場狀態 (Auto)", ["🇹🇼 台股 (TW)", "🗽 美股 (US)"], index=0 if "台股" in st.session_state.market_mode else 1)
-    st.session_state.market_mode = market_mode
+    # Only show stock analysis filters if in Dashboard mode
+    if app_mode == "📈 股市戰情室":
+        market_mode = st.radio("🌐 戰場狀態 (Auto)", ["🇹🇼 台股 (TW)", "🗽 美股 (US)"], index=0 if "台股" in st.session_state.market_mode else 1)
+        st.session_state.market_mode = market_mode
 
-    st.divider()
-    timeframe = st.radio("🕒 K線週期", ["1d (日線)", "1wk (週線)"], index=0)
-    tf_code = "1wk" if "週線" in timeframe else "1d"
-    is_weekly = (tf_code == "1wk")
+        st.divider()
+        timeframe = st.radio("🕒 K線週期", ["1d (日線)", "1wk (週線)"], index=0)
+        tf_code = "1wk" if "週線" in timeframe else "1d"
+        is_weekly = (tf_code == "1wk")
 
-    strategy_mode = st.radio("⚔️ 交易風格", ["🔥 順勢突破 (Momentum)", "🛡️ 拉回抄底 (Dip Buy)"])
+        strategy_mode = st.radio("⚔️ 交易風格", ["🔥 順勢突破 (Momentum)", "🛡️ 拉回抄底 (Dip Buy)"])
 
-    st.divider()
-    st.markdown("### ⚖️ 判官工具箱")
-    c1, c2 = st.columns(2)
-    st.session_state.chart_settings['trendline'] = c1.checkbox("趨勢線", value=True)
-    st.session_state.chart_settings['patterns'] = c2.checkbox("幾何型態", value=True)
-    c3, c4 = st.columns(2)
-    st.session_state.chart_settings['support'] = c3.checkbox("支撐壓力", value=True)
-    st.session_state.chart_settings['ghost_lines'] = c4.checkbox("鬼影線", value=True)
-    st.markdown("---")
-    st.session_state.chart_settings['volume_strict'] = st.checkbox("🔍 嚴格成交量", value=True)
-    st.session_state.chart_settings['rectangle'] = st.checkbox("矩形(Box)", value=True)
-    st.session_state.chart_settings['broadening'] = st.checkbox("擴散(喇叭)", value=True)
-    st.session_state.chart_settings['rounding'] = st.checkbox("圓弧頂底", value=True)
-    st.session_state.chart_settings['log_scale'] = st.checkbox("對數座標", value=False)
-    st.session_state.chart_settings['diamond'] = st.checkbox("鑽石型態", value=True)
-    st.session_state.chart_settings['wedge'] = st.checkbox("楔形判斷", value=True)
-    st.markdown("---")
-    st.session_state.chart_settings['bbands'] = st.checkbox("布林通道", value=True)
-    st.session_state.chart_settings['macd'] = st.checkbox("MACD", value=True)
-    st.session_state.chart_settings['kd'] = st.checkbox("KD 指標", value=True)
-    st.session_state.chart_settings['obv'] = st.checkbox("OBV 能量潮", value=True)
+        st.divider()
+        st.markdown("### ⚖️ 判官工具箱")
+        c1, c2 = st.columns(2)
+        st.session_state.chart_settings['trendline'] = c1.checkbox("趨勢線", value=True)
+        st.session_state.chart_settings['patterns'] = c2.checkbox("幾何型態", value=True)
+        c3, c4 = st.columns(2)
+        st.session_state.chart_settings['support'] = c3.checkbox("支撐壓力", value=True)
+        st.session_state.chart_settings['ghost_lines'] = c4.checkbox("鬼影線", value=True)
+        st.markdown("---")
+        st.session_state.chart_settings['volume_strict'] = st.checkbox("🔍 嚴格成交量", value=True)
+        st.session_state.chart_settings['rectangle'] = st.checkbox("矩形(Box)", value=True)
+        st.session_state.chart_settings['broadening'] = st.checkbox("擴散(喇叭)", value=True)
+        st.session_state.chart_settings['rounding'] = st.checkbox("圓弧頂底", value=True)
+        st.session_state.chart_settings['log_scale'] = st.checkbox("對數座標", value=False)
+        st.session_state.chart_settings['diamond'] = st.checkbox("鑽石型態", value=True)
+        st.session_state.chart_settings['wedge'] = st.checkbox("楔形判斷", value=True)
+        st.markdown("---")
+        st.session_state.chart_settings['bbands'] = st.checkbox("布林通道", value=True)
+        st.session_state.chart_settings['macd'] = st.checkbox("MACD", value=True)
+        st.session_state.chart_settings['kd'] = st.checkbox("KD 指標", value=True)
+        st.session_state.chart_settings['obv'] = st.checkbox("OBV 能量潮", value=True)
+    else:
+        st.info("目前位於「量化回測系統」模式。")
 
-    st.markdown("### 🧬 0. 策略回測實驗室")
-    finlab_token = st.text_input("Finlab API Token", type="password")
+# === Main Content Area Switching ===
 
-    strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)"])
+if app_mode == "🧬 量化回測系統":
+    st.header("🧬 量化策略回測實驗室")
 
-    if st.button("🔬 執行回測"):
+    # Input Area
+    with st.expander("🛠️ 策略設定 (Strategy Settings)", expanded=True):
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            finlab_token = st.text_input("Finlab API Token", type="password", help="請輸入您的 Finlab API 金鑰")
+        with col2:
+            strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)"])
+
+        run_btn = st.button("🔬 執行回測 (Run Backtest)", use_container_width=True, type="primary")
+
+    if run_btn:
         if not finlab_token:
             st.error("請輸入 Finlab API Token")
         else:
-            with st.spinner(f"正在執行 {strategy_type} 回測..."):
+            with st.spinner(f"正在執行 {strategy_type} 回測... (這可能需要幾分鐘)"):
                 try:
                     # Import dynamically to avoid top-level dependency if not used
                     if "純做多" in strategy_type:
@@ -622,66 +639,106 @@ with st.sidebar:
 
                     st.success("回測完成！")
 
-                    # Visualize Equity Curve
-                    # Use 'creturn' if available directly, or check other attributes
+                    # --- Visualization ---
+
+                    # 1. Equity & Drawdown
                     if hasattr(report, 'creturn'):
                         equity = report.creturn
-                    elif hasattr(report, 'benchmark'): # Sometimes creturn is hidden but benchmark available? No.
-                         # Try getting stats and see if we can plot simply from trades?
-                         # Or just assume report.creturn exists for now based on inspection v3
+                    elif hasattr(report, 'benchmark'):
                          equity = getattr(report, 'creturn', None)
                     else:
                          equity = None
 
-                    # Manually calculate drawdown if method not found
                     if equity is not None:
                         drawdown = equity / equity.cummax() - 1
-                    else:
-                        drawdown = None
 
-                    # If equity is missing, try to get it from benchmark? No.
-
-                    if equity is not None:
                         fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                          subplot_titles=("權益曲線 (Equity Curve)", "最大回落 (Drawdown)"),
-                                          vertical_spacing=0.1)
+                                          subplot_titles=("資產權益曲線 (Equity Curve)", "資金回撤 (Drawdown)"),
+                                          vertical_spacing=0.1, row_heights=[0.7, 0.3])
 
                         fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
-                                               mode='lines', name='Strategy Return',
-                                               line=dict(color='green', width=2)), row=1, col=1)
+                                               mode='lines', name='策略報酬',
+                                               line=dict(color='#22c55e', width=2)), row=1, col=1)
 
                         if hasattr(report, 'benchmark') and report.benchmark is not None:
                              fig.add_trace(go.Scatter(x=report.benchmark.index, y=report.benchmark.values,
-                                               mode='lines', name='Benchmark',
+                                               mode='lines', name='大盤基準',
                                                line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
 
                         if drawdown is not None:
                             fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
-                                                   mode='lines', name='Drawdown',
-                                                   line=dict(color='red', width=2), fill='tozeroy'), row=2, col=1)
+                                                   mode='lines', name='回撤幅度',
+                                                   line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
 
-                        fig.update_layout(height=600, title_text="策略績效分析")
+                        fig.update_layout(height=700, title_text="策略績效分析")
                         st.plotly_chart(fig, use_container_width=True)
 
-                    # Display Metrics
+                    # 2. Performance Metrics
+                    st.subheader("📊 策略績效指標")
                     stats = report.get_stats()
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("CAGR (年化報酬)", f"{stats.get('cagr', 0)*100:.2f}%")
-                    c2.metric("Max Drawdown", f"{stats.get('max_drawdown', 0)*100:.2f}%")
-                    c3.metric("Sharpe Ratio", f"{stats.get('sharpe', 0):.2f}")
-                    c4.metric("Win Rate", f"{stats.get('win_rate', 0)*100:.2f}%")
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric("年化報酬率 (CAGR)", f"{stats.get('cagr', 0)*100:.2f}%")
+                    c2.metric("最大回撤 (Max Drawdown)", f"{stats.get('max_drawdown', 0)*100:.2f}%")
+                    c3.metric("夏普比率 (Sharpe Ratio)", f"{stats.get('sharpe', 0):.2f}")
+                    c4.metric("勝率 (Win Rate)", f"{stats.get('win_rate', 0)*100:.2f}%")
+                    c5.metric("獲利因子 (Profit Factor)", f"{stats.get('profit_factor', 0):.2f}")
 
-                    # Display Trades
-                    st.subheader("📋 最近交易紀錄")
+                    # 3. Trade Log (Enhanced)
+                    st.subheader("📋 詳細交易紀錄 (Trade Log)")
                     trades = report.get_trades()
+
                     if not trades.empty:
-                        st.dataframe(trades.tail(50).sort_index(ascending=False), use_container_width=True)
+                        # Rename columns for clarity
+                        # Usually columns are: stock_id, entry_date, exit_date, entry_sig_date, exit_sig_date, entry_price, exit_price, return, mae, mfe...
+                        # Check columns first
+                        # st.write(trades.columns) # Debug
+
+                        rename_map = {
+                            "stock_id": "股票代碼",
+                            "entry_date": "進場日期",
+                            "exit_date": "出場日期",
+                            "entry_price": "進場價",
+                            "exit_price": "出場價",
+                            "return": "報酬率",
+                            "mae": "最大不利(MAE)",
+                            "mfe": "最大有利(MFE)",
+                            "period": "持有天數"
+                        }
+
+                        trades_display = trades.copy()
+                        trades_display.rename(columns=rename_map, inplace=True)
+
+                        # Format percentages
+                        if '報酬率' in trades_display.columns:
+                            trades_display['報酬率'] = trades_display['報酬率'].apply(lambda x: f"{x*100:.2f}%")
+
+                        # Select relevant columns to display
+                        cols_to_show = [c for c in ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數'] if c in trades_display.columns]
+
+                        # Show styled dataframe
+                        def highlight_ret(val):
+                            color = ''
+                            if isinstance(val, str) and '%' in val:
+                                try:
+                                    v = float(val.replace('%', ''))
+                                    color = 'color: #22c55e' if v > 0 else 'color: #ef4444'
+                                except: pass
+                            return color
+
+                        st.dataframe(
+                            trades_display[cols_to_show].sort_values("進場日期", ascending=False).style.map(highlight_ret, subset=['報酬率']),
+                            use_container_width=True,
+                            height=500
+                        )
                     else:
                         st.info("無交易紀錄")
 
                 except Exception as e:
                     st.error(f"回測失敗: {e}")
 
+# Only show original dashboard if in Dashboard Mode
+elif app_mode == "📈 股市戰情室":
+    # Reuse original input logic but moved here
     st.markdown("### 🔎 1. 全市場狙擊")
     single_input = st.text_input("輸入代碼/名稱 (如 凡甲, NVDA)", placeholder="Sniper Input...")
     if st.button("🚀 分析個股"):
@@ -753,121 +810,121 @@ with st.sidebar:
                     st.session_state.view_mode = "list"
                 else: st.error("供應鏈拆解失敗")
 
-# === Main Display ===
+    # === Main Display for Dashboard Mode ===
 
-if st.session_state.view_mode == "single" and st.session_state.single_stock_data:
-    data = st.session_state.single_stock_data
-    verdict = data.get('verdict', {})
-    patterns = data.get('patterns', [])
+    if st.session_state.view_mode == "single" and st.session_state.single_stock_data:
+        data = st.session_state.single_stock_data
+        verdict = data.get('verdict', {})
+        patterns = data.get('patterns', [])
 
-    st.button("🔙 返回列表模式", on_click=lambda: st.session_state.update({"view_mode": "list"}))
-    st.markdown(f"## 🎯 {data['代碼']} {data['名稱']} 個股戰情室 ({tf_code})")
+        st.button("🔙 返回列表模式", on_click=lambda: st.session_state.update({"view_mode": "list"}))
+        st.markdown(f"## 🎯 {data['代碼']} {data['名稱']} 個股戰情室 ({tf_code})")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: custom_metric("現價", data['現價'], f"{data['漲跌幅%']}%")
-    with c2: custom_metric("爆量", f"{data['爆量倍數']}x", None)
-    with c3: custom_metric("本益比", f"{data['PE']}", None)
-    with c4: custom_metric("EPS", f"{data['EPS']}", None)
-    with c5: custom_metric("殖利率 (Yield)", f"{data.get('Yield', 'N/A')}", None)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: custom_metric("現價", data['現價'], f"{data['漲跌幅%']}%")
+        with c2: custom_metric("爆量", f"{data['爆量倍數']}x", None)
+        with c3: custom_metric("本益比", f"{data['PE']}", None)
+        with c4: custom_metric("EPS", f"{data['EPS']}", None)
+        with c5: custom_metric("殖利率 (Yield)", f"{data.get('Yield', 'N/A')}", None)
 
-    # [Native UI Fix]: Use Streamlit's native info/success/error box
-    trend_val = verdict.get('trend', '')
-    if '多' in trend_val or '上升' in trend_val:
-        status_box = st.success
-    elif '空' in trend_val or '下降' in trend_val:
-        status_box = st.error
-    else:
-        status_box = st.warning
+        # [Native UI Fix]: Use Streamlit's native info/success/error box
+        trend_val = verdict.get('trend', '')
+        if '多' in trend_val or '上升' in trend_val:
+            status_box = st.success
+        elif '空' in trend_val or '下降' in trend_val:
+            status_box = st.error
+        else:
+            status_box = st.warning
 
-    with status_box(icon="⚖️", body=f"**程式判決：{trend_val}**"):
-        st.write(f"**訊號**：{verdict.get('signal')}")
-        if verdict.get('details'):
+        with status_box(icon="⚖️", body=f"**程式判決：{trend_val}**"):
+            st.write(f"**訊號**：{verdict.get('signal')}")
+            if verdict.get('details'):
+                st.markdown("---")
+                for d in verdict.get('details'):
+                    st.caption(f"• {d}")
             st.markdown("---")
-            for d in verdict.get('details'):
-                st.caption(f"• {d}")
-        st.markdown("---")
-        st.markdown(f"**⚡ 深度掃描**：{data.get('signal_context', '無')}")
+            st.markdown(f"**⚡ 深度掃描**：{data.get('signal_context', '無')}")
 
-    render_trend_chart(data['df'], patterns, st.session_state.market_mode, is_box=verdict.get('is_box', False), height=900, is_weekly=is_weekly)
+        render_trend_chart(data['df'], patterns, st.session_state.market_mode, is_box=verdict.get('is_box', False), height=900, is_weekly=is_weekly)
 
-    # AI Report Display
-    report_key = f"SINGLE_{data['代碼']}"
-    if report_key in st.session_state.ai_reports:
-        st.markdown("### 🦄 AI 深度評論")
-        st.markdown(f"<div class='ai-box'>{st.session_state.ai_reports[report_key]}</div>", unsafe_allow_html=True)
+        # AI Report Display
+        report_key = f"SINGLE_{data['代碼']}"
+        if report_key in st.session_state.ai_reports:
+            st.markdown("### 🦄 AI 深度評論")
+            st.markdown(f"<div class='ai-box'>{st.session_state.ai_reports[report_key]}</div>", unsafe_allow_html=True)
 
-else:
-    if st.session_state.detected_themes:
-        st.markdown("### 🔥 請點擊感興趣的主題：")
-        cols = st.columns(len(st.session_state.detected_themes))
-        for i, theme in enumerate(st.session_state.detected_themes):
-            safe_theme_label = str(theme)
-            if cols[i].button(safe_theme_label, use_container_width=True):
-                st.session_state.single_stock_data = None
-                with st.spinner(f"正在挖掘「{safe_theme_label}」供應鏈..."):
-                    structure = generate_supply_chain_structure(st.session_state.market_mode, safe_theme_label)
-                    if structure and isinstance(structure, dict):
-                        st.session_state.supply_chain_data = {"keyword": safe_theme_label, "structure": structure}
-                        df = scan_tickers_from_map(st.session_state.market_mode, structure, strategy_mode, timeframe=tf_code)
-                        st.session_state.data_cache[st.session_state.market_mode] = df
-                        st.session_state.current_source = f"🔥 {safe_theme_label}"
-                    else: st.error("AI 正在思考中，請再試一次或換個主題")
-    st.divider()
-
-    if st.button("🔙 回到預設清單 (全市場掃描)"):
-        st.session_state.supply_chain_data = None
-        st.session_state.single_stock_data = None
-        st.session_state.detected_themes = []
-        st.session_state.view_mode = "list"
-        with st.spinner("載入完整資料庫..."):
-            default_map = get_default_sector_map_full(st.session_state.market_mode)
-            df = scan_tickers_from_map(st.session_state.market_mode, default_map, strategy_mode, timeframe=tf_code)
-            st.session_state.data_cache[st.session_state.market_mode] = df
-            st.session_state.current_source = "🗂️ 預設清單"
-
-    if st.session_state.supply_chain_data:
-        st.markdown(f"## 🗺️ {st.session_state.supply_chain_data['keyword']} 產業供應鏈地圖")
-        render_supply_chain_graph(
-            st.session_state.supply_chain_data['keyword'],
-            st.session_state.supply_chain_data['structure'],
-            st.session_state.market_mode
-        )
+    else:
+        if st.session_state.detected_themes:
+            st.markdown("### 🔥 請點擊感興趣的主題：")
+            cols = st.columns(len(st.session_state.detected_themes))
+            for i, theme in enumerate(st.session_state.detected_themes):
+                safe_theme_label = str(theme)
+                if cols[i].button(safe_theme_label, use_container_width=True):
+                    st.session_state.single_stock_data = None
+                    with st.spinner(f"正在挖掘「{safe_theme_label}」供應鏈..."):
+                        structure = generate_supply_chain_structure(st.session_state.market_mode, safe_theme_label)
+                        if structure and isinstance(structure, dict):
+                            st.session_state.supply_chain_data = {"keyword": safe_theme_label, "structure": structure}
+                            df = scan_tickers_from_map(st.session_state.market_mode, structure, strategy_mode, timeframe=tf_code)
+                            st.session_state.data_cache[st.session_state.market_mode] = df
+                            st.session_state.current_source = f"🔥 {safe_theme_label}"
+                        else: st.error("AI 正在思考中，請再試一次或換個主題")
         st.divider()
 
-    current_df = st.session_state.data_cache.get(st.session_state.market_mode)
-    if current_df is not None and not current_df.empty:
-        st.subheader(f"{st.session_state.current_source} 數據掃描 ({tf_code})")
-        for idx, row in current_df.iterrows():
-            ticker = row['代碼']; name = row['名稱']
-            with st.expander(f"{ticker} {name} | {row['族群']} | {row['趨勢']}", expanded=(idx==0)):
-                c1, c2, c3, c4, c5 = st.columns(5)
-                with c1: custom_metric("現價", row['現價'], f"{row['漲跌幅%']}%")
-                with c2: custom_metric("爆量", f"{row['爆量倍數']}x", None)
-                with c3: custom_metric("短均", row['短均'], None)
-                with c4: custom_metric("長均", row['長均'], None)
-                with c5: custom_metric("RSI", row['RSI'], None)
+        if st.button("🔙 回到預設清單 (全市場掃描)"):
+            st.session_state.supply_chain_data = None
+            st.session_state.single_stock_data = None
+            st.session_state.detected_themes = []
+            st.session_state.view_mode = "list"
+            with st.spinner("載入完整資料庫..."):
+                default_map = get_default_sector_map_full(st.session_state.market_mode)
+                df = scan_tickers_from_map(st.session_state.market_mode, default_map, strategy_mode, timeframe=tf_code)
+                st.session_state.data_cache[st.session_state.market_mode] = df
+                st.session_state.current_source = "🗂️ 預設清單"
 
-                verdict = row.get('verdict', {})
-                # Native UI for List View
-                trend_val = row['趨勢']
-                if '多' in trend_val or '上升' in trend_val: color = "green"
-                elif '空' in trend_val or '下降' in trend_val: color = "red"
-                else: color = "gray"
+        if st.session_state.supply_chain_data:
+            st.markdown(f"## 🗺️ {st.session_state.supply_chain_data['keyword']} 產業供應鏈地圖")
+            render_supply_chain_graph(
+                st.session_state.supply_chain_data['keyword'],
+                st.session_state.supply_chain_data['structure'],
+                st.session_state.market_mode
+            )
+            st.divider()
 
-                st.markdown(f":{color}-background[**⚖️ {trend_val}**] | {row.get('signal_context', '')}")
+        current_df = st.session_state.data_cache.get(st.session_state.market_mode)
+        if current_df is not None and not current_df.empty:
+            st.subheader(f"{st.session_state.current_source} 數據掃描 ({tf_code})")
+            for idx, row in current_df.iterrows():
+                ticker = row['代碼']; name = row['名稱']
+                with st.expander(f"{ticker} {name} | {row['族群']} | {row['趨勢']}", expanded=(idx==0)):
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    with c1: custom_metric("現價", row['現價'], f"{row['漲跌幅%']}%")
+                    with c2: custom_metric("爆量", f"{row['爆量倍數']}x", None)
+                    with c3: custom_metric("短均", row['短均'], None)
+                    with c4: custom_metric("長均", row['長均'], None)
+                    with c5: custom_metric("RSI", row['RSI'], None)
 
-                render_trend_chart(row['df'], row['patterns'], st.session_state.market_mode, is_box=row.get('verdict', {}).get('is_box', False), height=600, is_weekly=is_weekly)
+                    verdict = row.get('verdict', {})
+                    # Native UI for List View
+                    trend_val = row['趨勢']
+                    if '多' in trend_val or '上升' in trend_val: color = "green"
+                    elif '空' in trend_val or '下降' in trend_val: color = "red"
+                    else: color = "gray"
 
-                cache_key = f"{st.session_state.market_mode}_{ticker}_{strategy_mode}"
-                if cache_key in st.session_state.ai_reports:
-                    st.markdown(f"<div class='ai-box'><strong>🦄 AI 分析：</strong><br>{st.session_state.ai_reports[cache_key]}</div>", unsafe_allow_html=True)
-                else:
-                    if st.button(f"🧠 AI 分析 {name}", key=f"btn_{ticker}"):
-                        with st.spinner("分析中..."):
-                            tech_str = f"短均{row['短均']}, 長均{row['長均']}, RSI{row['RSI']}"
-                            report = generate_ai_analysis(st.session_state.market_mode, ticker, name, row['現價'], row['漲跌幅%'], row['族群'], tech_str, strategy_mode, f"趨勢：{row['趨勢']}", timeframe=tf_code, signal_context=row.get('signal_context', ''))
-                            st.session_state.ai_reports[cache_key] = report
-                            st.rerun()
-    else:
-        if current_df is not None: st.warning("無符合資料。")
-        else: st.info("👈 請選擇側邊欄的搜尋方式開始。")
+                    st.markdown(f":{color}-background[**⚖️ {trend_val}**] | {row.get('signal_context', '')}")
+
+                    render_trend_chart(row['df'], row['patterns'], st.session_state.market_mode, is_box=row.get('verdict', {}).get('is_box', False), height=600, is_weekly=is_weekly)
+
+                    cache_key = f"{st.session_state.market_mode}_{ticker}_{strategy_mode}"
+                    if cache_key in st.session_state.ai_reports:
+                        st.markdown(f"<div class='ai-box'><strong>🦄 AI 分析：</strong><br>{st.session_state.ai_reports[cache_key]}</div>", unsafe_allow_html=True)
+                    else:
+                        if st.button(f"🧠 AI 分析 {name}", key=f"btn_{ticker}"):
+                            with st.spinner("分析中..."):
+                                tech_str = f"短均{row['短均']}, 長均{row['長均']}, RSI{row['RSI']}"
+                                report = generate_ai_analysis(st.session_state.market_mode, ticker, name, row['現價'], row['漲跌幅%'], row['族群'], tech_str, strategy_mode, f"趨勢：{row['趨勢']}", timeframe=tf_code, signal_context=row.get('signal_context', ''))
+                                st.session_state.ai_reports[cache_key] = report
+                                st.rerun()
+        else:
+            if current_df is not None: st.warning("無符合資料。")
+            else: st.info("👈 請選擇側邊欄的搜尋方式開始。")
