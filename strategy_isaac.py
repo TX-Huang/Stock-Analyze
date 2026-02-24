@@ -31,6 +31,14 @@ def run_isaac_strategy(api_token):
         rev_current = pd.DataFrame(0, index=close.index, columns=close.columns)
         capital = pd.DataFrame(10000000, index=close.index, columns=close.columns) # Dummy large capital
 
+    # Institutional Data for Short Strategy
+    try:
+        foreign_buy = data.get('institutional_investors:外資買賣超股數').fillna(0)
+        trust_buy = data.get('institutional_investors:投信買賣超股數').fillna(0)
+        inst_net_buy = foreign_buy + trust_buy
+    except:
+        inst_net_buy = pd.DataFrame(0, index=close.index, columns=close.columns)
+
     # ==========================================
     # 2. Indicators & Market Filter
     # ==========================================
@@ -45,61 +53,46 @@ def run_isaac_strategy(api_token):
     vol_ma5 = vol.average(5)
     vol_ma20 = vol.average(20)
 
-    # ATR (Average True Range) for Volatility Stop Loss
-    tr1 = high - low
-    tr2 = (high - close.shift(1)).abs()
-    tr3 = (low - close.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=0).max(level=0) # Fix for vectorization if needed, but finlab handles it?
-    # Finlab efficient way:
-    tr = np.maximum((high - low), (high - close.shift(1)).abs())
-    tr = np.maximum(tr, (low - close.shift(1)).abs())
-    atr = tr.rolling(14).mean()
+    # RSI
+    def rsi(series, period=14):
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    my_rsi = rsi(close, 14)
 
     # Market Regime Filter (Red Light / Green Light)
     # Strategy works best when Market > 60MA (Quarterly)
-    # We broaden to all stocks based on benchmark
-    market_trend = benchmark_close > benchmark_close.average(60)
-    # Broadcast market trend to all stocks
-    is_market_bullish = pd.DataFrame(market_trend.values, index=benchmark_close.index, columns=['0050']).reindex(close.index, method='ffill').values
-    # Note: reindex properly to match shape of 'close'
-    # Actually, simpler way:
-    is_market_bullish = (benchmark_close > benchmark_close.average(60))
+    # 1% Buffer Zone:
+    # Bull > 1.01 * 60MA
+    # Bear < 0.99 * 60MA
+    bench_ma60 = benchmark_close.average(60)
+    is_market_bullish = (benchmark_close > bench_ma60 * 1.01)
+    is_market_bearish = (benchmark_close < bench_ma60 * 0.99)
 
     # ==========================================
     # 3. Signal A: Small-Cap Revenue Surprise (Aggressive Growth)
     # ==========================================
 
-    # A1. Small Capital (< 20 Billion TWD = 200 億? No, User said 20億 = 2 Billion)
-    # Data unit in Finlab 'finance_statement:股本' is usually 1000 TWD or similar?
-    # Let's assume standard unit. Actually '股本' is usually in 1000s or just raw.
-    # Let's check finlab docs or assume standard: usually 1000s.
-    # 2 Billion TWD = 2,000,000,000. If unit is 1000, then 2,000,000.
-    # Safe bet: Market Cap < 50 Billion is safer proxy?
-    # User specified "股本 20億以下".
-    # Let's try to filter by a reasonable small cap proxy using price * shares if capital unit is ambiguous.
-    # Assuming '股本' is in 1000 NTD (common in TW data). 20億 = 2,000,000 (k).
-    cond_small_cap = capital < 2000000 # 20億
+    # A1. Small Capital (< 20 Billion TWD = 200 億 => 2,000,000 k)
+    cond_small_cap = capital < 2000000
 
     # A2. Revenue Explosion
-    # Monthly YoY > 30% OR Revenue at 12-Month High
     rev_12m_max = rev_current.rolling(12).max()
     cond_rev_strong = (rev_growth > 30) | (rev_current >= rev_12m_max)
     cond_rev_strong = cond_rev_strong.reindex(close.index, method='ffill').fillna(False)
 
     # A3. Technical Trend (VCP-lite)
-    # Price > 20MA & Price > 60MA (Up Trend)
     cond_trend = (close > ma20) & (close > ma60)
 
-    # A4. VCP Dry Up (Optional but good for entry timing)
-    # Volume < 50% of 20MA Volume in last 5 days (at least once)
+    # A4. VCP Dry Up
     is_dry_up = (vol < vol_ma20 * 0.5).rolling(5).max() > 0
 
     # A5. Breakout
-    # Close > 20-day High (Dynamic Breakout) AND Volume Spike
     breakout = (close > close.rolling(20).max().shift(1)) & (vol > vol_ma5 * 1.5)
 
-    # SIGNAL A TRIGGER
-    # Must be Bull Market + Small Cap + Strong Rev + Trend + DryUp(Context) + Breakout
+    # SIGNAL A TRIGGER (Only in Bull Market)
     signal_a = (
         is_market_bullish &
         cond_small_cap &
@@ -113,34 +106,24 @@ def run_isaac_strategy(api_token):
     # ==========================================
 
     # B1. Deep Discount
-    # Price < 120MA (Half-Year Line) - User requirement
-    # Price < Lower BBand? Or just Bias.
     cond_oversold_trend = close < ma120
 
     # B2. RSI Extreme (< 20)
-    def rsi(series, period=14):
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-
-    my_rsi = rsi(close, 14)
     cond_rsi_panic = my_rsi < 20
 
     # B3. Reversal Candle (Hammer)
-    # Long Lower Shadow: (Min(Open, Close) - Low) > 2 * Body
     body = (close - open_).abs()
     lower_shadow = (close.combine(open_, min) - low)
     cond_hammer = lower_shadow > (body * 2)
 
-    # B4. Volume Spike (Panic Selling absorption)
+    # B4. Volume Spike
     cond_vol_panic = vol > (vol_ma20 * 2)
 
-    # SIGNAL B TRIGGER
-    # Bear Market or Correction is fine for this signal.
-    # Logic: Deep Oversold + RSI < 20 + Hammer + Vol Spike
+    # SIGNAL B TRIGGER (Bull Market Only - catching dips)
+    # Actually, Mean Reversion works best when Market is Bullish but Stock is temporarily dead.
+    # In Bear Market, buying dips is dangerous (catching falling knives).
     signal_b = (
+        is_market_bullish &
         cond_oversold_trend &
         cond_rsi_panic &
         cond_hammer &
@@ -148,61 +131,78 @@ def run_isaac_strategy(api_token):
     )
 
     # ==========================================
-    # 5. Position & Exit Management (MDD Control)
+    # 5. Signal C: Bear Hunter (Short Selling)
     # ==========================================
 
-    # Combined Entry
-    entries = signal_a | signal_b
+    # C1. Weak Structure
+    # Price < 60MA AND Price < 20MA
+    cond_weak_structure = (close < ma60) & (close < ma20)
 
-    # Exit Logic
-    # 1. Trailing Stop (ATR Chandelier Exit)
-    # High watermark since entry - 3 * ATR
-    # For vectorized, simplified to: Close < 20MA (Signal A) OR RSI > 50 (Signal B)
+    # C2. Bias Filter (Not too oversold)
+    # Bias = (Price - 20MA) / 20MA
+    # We want to short when Price is close to MA (Bias > -10%), not when it's already crashed (-30%)
+    bias_20 = (close - ma20) / ma20
+    cond_bias_ok = bias_20 > -0.10
 
-    # We need to distinguish which signal triggered to apply different exits?
-    # Hard in pure vectorization without loop.
-    # Let's use a unified robust exit:
-    # - Trend Exit: Close < 20MA (Aggressive protection)
-    # - Stop Loss: 10% Hard Stop (approx)
+    # C3. Fundamental/Chip Weakness
+    # Revenue Contraction (YoY < 0) OR Heavy Inst Selling
+    cond_bad_fund = (rev_growth < 0).reindex(close.index, method='ffill').fillna(False)
+    cond_inst_sell = inst_net_buy.rolling(3).sum() < 0 # Net sell over 3 days
 
-    # User wants MDD < 20%, so we need TIGHT exits.
-    # Let's use Close < 20MA. It's the standard "Monthly Line" defense.
-    # If Market turns Bearish (Green Light off), we should probably exit Signal A positions too?
-    # Let's add: Exit if Market < 60MA (Market Filter Exit)
+    # C4. Rebound Failure (Black Candle eating previous gains? Simplified to Price < Open)
+    cond_black_candle = close < open_
 
-    # Unified Exit:
-    # 1. Close < 20MA (Trend broken)
-    # 2. Market Turn: Benchmark < 60MA (Systematic Risk) - Only applies to Trend trades (Signal A logic mainly)
+    # SIGNAL C TRIGGER (Only in Bear Market)
+    signal_c_short = (
+        is_market_bearish &
+        cond_weak_structure &
+        cond_bias_ok &
+        (cond_bad_fund | cond_inst_sell) &
+        cond_black_candle
+    )
 
-    exits = (close < ma20) | (~is_market_bullish)
+    # ==========================================
+    # 6. Position Management
+    # ==========================================
 
-    # But Signal B (Mean Reversion) needs to sell on bounce, not wait for trend break (which might be far above/below).
-    # Signal B Exit: RSI > 50 OR Close > 20MA (Reconnected to trend)
-    # Since we can't easily split positions, let's prioritize the Trend Exit (Close < 20MA).
-    # For Mean Reversion, "Close < 20MA" might be true immediately (since we buy way below 120MA).
-    # Wait, if we buy below 120MA, Close < 20MA is likely True at entry!
-    # This is a conflict.
-    # FIX: For Signal B, we hold UNTIL Price > 20MA (Reversion complete) THEN we use trailing stop?
-    # OR simpler: Exit Signal B when RSI > 50.
+    # Long Entries
+    long_entries = signal_a | signal_b
 
-    # Let's refine exits:
-    # Default: Hold
-    # Force Exit: Close < 20MA (Normal Stop)
-    # Exception: If (Close < 120MA) AND (RSI < 40), HOLD (We are in deep value zone, give it room to bounce).
-    # This prevents immediate stop-out for Signal B.
-
+    # Long Exits
+    # 1. Trend Break: Close < 20MA (Aggressive)
+    # 2. Market Bearish Turn: Benchmark < 60MA
+    # Exception: Deep Value Hold (Signal B)
     is_deep_value = (close < ma120) & (my_rsi < 40)
-    final_exit = (close < ma20) & (~is_deep_value)
+    long_exits = ((close < ma20) | is_market_bearish) & (~is_deep_value)
 
-    # Construct Position
-    position = pd.DataFrame(np.nan, index=entries.index, columns=entries.columns)
-    position[entries] = 1
-    position[final_exit] = 0
-    position = position.ffill().fillna(0)
+    # Short Entries
+    short_entries = signal_c_short
 
-    # Liquidity Filter for Universe
-    position = position & (vol.average(20) > 1000000) # > 1000 lots for safety
+    # Short Exits (Cover)
+    # 1. Trend Reversal: Close > 20MA
+    # 2. Market Bullish Turn: Benchmark > 60MA
+    # 3. Profit Taking: RSI < 20 (Oversold)
+    short_exits = (close > ma20) | is_market_bullish | (my_rsi < 20)
+
+    # Construct Long Position
+    pos_long = pd.DataFrame(np.nan, index=long_entries.index, columns=long_entries.columns)
+    pos_long[long_entries] = 1
+    pos_long[long_exits] = 0
+    pos_long = pos_long.ffill().fillna(0)
+
+    # Construct Short Position
+    pos_short = pd.DataFrame(np.nan, index=short_entries.index, columns=short_entries.columns)
+    pos_short[short_entries] = -0.5 # Half position for shorts (Risk Control)
+    pos_short[short_exits] = 0
+    pos_short = pos_short.ffill().fillna(0)
+
+    # Combine (Net Position)
+    # Note: A stock can't be Long and Short at same time due to Market Filter mutual exclusion.
+    final_pos = pos_long + pos_short
+
+    # Liquidity Filter
+    final_pos = final_pos & (vol.average(20) > 1000000)
 
     # Run Backtest
-    report = backtest.sim(position, resample='D', name='Isaac Strategy (Multi-Factor)', upload=False)
+    report = backtest.sim(final_pos, resample='D', name='Isaac Strategy (All-Weather)', upload=False)
     return report
