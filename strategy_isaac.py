@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import finlab
 
-def run_isaac_strategy(api_token):
+def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     if api_token:
         finlab.login(api_token)
 
@@ -282,5 +282,22 @@ def run_isaac_strategy(api_token):
     final_pos = final_pos * liq_filter # Zero out illiquid stocks
 
     # Run Backtest
-    report = backtest.sim(final_pos, resample='D', name='Isaac Strategy (All-Weather)', upload=False)
+    # Check if stop_loss or take_profit override is active (for Grid Search)
+    if stop_loss is not None or take_profit is not None:
+        # Finlab backtest.sim supports stop_loss and take_profit params
+        # Note: Position management above already has some exit logic.
+        # Ideally, we should apply SL/TP on top.
+        # But vectorization makes it hard to mix logic.
+        # Finlab's built-in SL/TP applies to each trade.
+        report = backtest.sim(
+            final_pos,
+            resample='D',
+            name='Isaac Strategy (Stress Test)',
+            upload=False,
+            stop_loss=stop_loss,
+            take_profit=take_profit
+        )
+    else:
+        report = backtest.sim(final_pos, resample='D', name='Isaac Strategy (All-Weather)', upload=False)
+
     return report
