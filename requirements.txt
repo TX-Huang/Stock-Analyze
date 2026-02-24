@@ -1,8 +1,17 @@
-streamlit
+# 核心量化與數據引擎
 finlab
 pandas
-plotly
-yfinance
-google-genai
 scipy
+pandas_ta
+
+# 外部市場數據撈取
+yfinance
+requests
+
+# 系統視覺化與前端介面 (UI)
+streamlit
+plotly
 graphviz
+
+# AI 輔助
+google-genai

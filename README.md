@@ -5,8 +5,12 @@
 
 ## 🚀 快速啟動 (Quick Start)
 
+### ⚠️ 環境需求 (Prerequisites)
+- **Python 版本**：強烈建議使用 **Python 3.11** 以確保 Finlab 套件的最佳穩定性。
+- **作業系統**：Windows 10/11, macOS, 或 Linux。
+
 ### Windows 使用者
-1. 確保電腦已安裝 [Python](https://www.python.org/)。
+1. 確保電腦已安裝 [Python 3.11](https://www.python.org/downloads/release/python-3110/)。
 2. 雙擊資料夾中的 **`run_windows.bat`**。
 3. 程式將自動安裝套件並開啟瀏覽器。
 
