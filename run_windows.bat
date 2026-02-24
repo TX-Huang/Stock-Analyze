@@ -14,7 +14,21 @@ if exist "python_embed\python.exe" (
     :: Ensure pip is installed in embedded python (it requires get-pip.py usually,
     :: but assuming user prepared it or we use ensurepip if available)
     :: Note: Embedded python often needs 'pth' file edit to see site-packages.
-    :: For simplicity, we assume if python_embed exists, it's ready.
+    :: We use a helper script to fix this automatically.
+
+    echo [INFO] Patching embedded python configuration...
+    "%TARGET_PY%" fix_embed_pth.py
+
+    :: Ensure pip is installed. Embedded python doesn't come with pip by default.
+    :: We download get-pip.py if not present.
+    if not exist "python_embed\Scripts\pip.exe" (
+        echo [INFO] Pip not found. Attempting to install pip...
+        if not exist "get-pip.py" (
+            echo [INFO] Downloading get-pip.py...
+            curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+        )
+        "%TARGET_PY%" get-pip.py
+    )
 
     goto :INSTALL_DEPS
 )
