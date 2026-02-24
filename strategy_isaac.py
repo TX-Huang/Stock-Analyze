@@ -22,6 +22,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     benchmark_close = data.get('price:收盤價')['0050']
 
+    print(f"[DEBUG] Close Shape: {close.shape}")
+    print(f"[DEBUG] Benchmark Shape: {benchmark_close.shape}")
+
     try:
         rev_growth = data.get('monthly_revenue:去年同月增減(%)')
         rev_current = data.get('monthly_revenue:當月營收')
@@ -128,6 +131,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_bullish = (v_bench > v_bench_ma60 * 1.01).reshape(-1, 1)
     v_bearish = (v_bench < v_bench_ma60 * 0.99).reshape(-1, 1)
 
+    print(f"[DEBUG] Market Bullish Days: {np.sum(v_bullish)}")
+    print(f"[DEBUG] Market Bearish Days: {np.sum(v_bearish)}")
+
     # ==========================================
     # 4. Logic Execution (Pure Math)
     # ==========================================
@@ -147,6 +153,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
     sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout
+    print(f"[DEBUG] Signal A Triggers: {np.sum(sig_a)}")
 
     # --- Signal B: Reversion ---
     c_oversold = v_close < v_ma120
@@ -159,6 +166,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_hammer = lower_shadow > (body * 2)
 
     sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic
+    print(f"[DEBUG] Signal B Triggers: {np.sum(sig_b)}")
 
     # --- Signal C: Short ---
     c_weak = (v_close < v_ma60) & (v_close < v_ma20)
@@ -181,6 +189,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_black = v_close < v_open
 
     sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black
+    print(f"[DEBUG] Signal C Triggers: {np.sum(sig_c)}")
 
     # ==========================================
     # 5. Position Reconstruction
