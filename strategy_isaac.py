@@ -200,11 +200,43 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     short_entries = sig_c
 
     # Exits
-    # is_deep_value = (close < ma120) & (my_rsi < 40)
-    c_deep = (v_close < v_ma120) & (v_rsi < 40)
+    # Logic Fix for "Immediate Stop Out":
+    # If we bought because of Signal B (Deep Value), we are likely BELOW 20MA.
+    # If we set exit as "Close < 20MA", we exit immediately!
 
-    # Long Exit: Close < 20MA OR Bearish, unless Deep Value
-    long_exits = ((v_close < v_ma20) | v_bearish) & (~c_deep)
+    # New Logic:
+    # 1. Trend Trade Exit: Close < 20MA (Standard Stop)
+    # 2. Reversion Trade Exit: RSI > 50 (Bounce Done) OR Close > 20MA (Trend Reconnected)
+    # 3. Market Turn: Bearish Market (Panic Sell)
+
+    # Problem: We don't know "which signal" triggered the entry in a vectorized backtest easily.
+    # Solution: We define "Holding States".
+
+    # State 1: Trend Holding. Condition: Price > 20MA.
+    # State 2: Deep Value Holding. Condition: Price < 20MA BUT RSI < 50 (Waiting for bounce).
+
+    # So, we should ONLY exit if:
+    # (Price < 20MA) AND (NOT Deep Value Recovery Mode)
+
+    # Deep Value Recovery Mode:
+    # Defined as: We are in a "Reversion Context" (e.g., Price < 60MA) AND RSI is still cooling off (< 50).
+    # If RSI > 50, the bounce is done -> Handover to Trend Logic (which requires > 20MA).
+
+    c_reversion_hold = (v_close < v_ma60) & (v_rsi < 50)
+
+    # Final Long Exit:
+    # 1. Normal Stop: Close < 20MA
+    # 2. BUT ignore Normal Stop if we are in Reversion Hold
+    # 3. Force Exit: Market Bearish (Systematic Risk) - unless Reversion Hold?
+    #    Actually, Mean Reversion IS catching knives in Bearish Market usually.
+    #    So Signal B should ignore Market Bearish filter?
+    #    Let's stick to the plan: Isaac B works in Bull Market Dips.
+    #    If Market is Bearish, we shouldn't be holding longs mostly.
+
+    # Refined Exit:
+    # Exit if: (Close < 20MA) AND (We are NOT waiting for a bounce)
+
+    long_exits = ((v_close < v_ma20) & (~c_reversion_hold)) | v_bearish
 
     # Short Exit: Close > 20MA OR Bullish OR RSI < 20
     short_exits = (v_close > v_ma20) | v_bullish | (v_rsi < 20)

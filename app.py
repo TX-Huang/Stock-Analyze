@@ -927,6 +927,16 @@ if app_mode == "🧬 量化回測系統":
                     (trades_display['進場日期'].dt.date <= end_date)
                 ]
 
+            # CSV Download (Full Data)
+            # Use the filtered but UN-PAGINATED data for download
+            csv = trades_filtered.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 下載完整交易明細 (.csv)",
+                data=csv,
+                file_name=f'trade_log_{datetime.now().strftime("%Y%m%d")}.csv',
+                mime='text/csv',
+            )
+
                 # === Pagination ===
                 items_per_page = 1000
                 total_items = len(trades_filtered)
