@@ -625,7 +625,7 @@ if app_mode == "🧬 量化回測系統":
             default_finlab = st.secrets.get("FINLAB_API_TOKEN", "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m")
             finlab_token = st.text_input("Finlab API Token", type="password", value=default_finlab, help="請輸入您的 Finlab API 金鑰")
         with col2:
-            strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)"])
+            strategy_type = st.selectbox("選擇回測策略", ["純做多策略 (Long Only)", "多空策略 (Long + Short)", "VCP 波動收縮策略 (Minervini)", "Isaac 頂級多因子策略 (Growth + Reversion)"])
 
         run_btn = st.button("🔬 執行回測 (Run Backtest)", use_container_width=True, type="primary")
 
@@ -642,6 +642,9 @@ if app_mode == "🧬 量化回測系統":
                     elif "VCP" in strategy_type:
                         import strategy_vcp
                         report = strategy_vcp.run_vcp_strategy(finlab_token)
+                    elif "Isaac" in strategy_type:
+                        import strategy_isaac
+                        report = strategy_isaac.run_isaac_strategy(finlab_token)
                     else:
                         import strategy_long_short
                         report = strategy_long_short.run_long_short_strategy(finlab_token)
