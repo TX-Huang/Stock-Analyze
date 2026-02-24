@@ -3,7 +3,23 @@ echo ==========================================
 echo      Alpha Global Quantitative Platform
 echo ==========================================
 echo.
-echo [1/3] Checking Python installation...
+
+set TARGET_PY=python
+
+:: Check for Embedded Python
+if exist "python_embed\python.exe" (
+    echo [INFO] Found Embedded Python. Using portable environment.
+    set TARGET_PY=python_embed\python.exe
+
+    :: Ensure pip is installed in embedded python (it requires get-pip.py usually,
+    :: but assuming user prepared it or we use ensurepip if available)
+    :: Note: Embedded python often needs 'pth' file edit to see site-packages.
+    :: For simplicity, we assume if python_embed exists, it's ready.
+
+    goto :INSTALL_DEPS
+)
+
+echo [1/3] Checking System Python installation...
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo Error: Python is not installed or not in PATH.
@@ -27,8 +43,10 @@ if %errorlevel% neq 0 (
     pause
 )
 
+:INSTALL_DEPS
+echo.
 echo [2/3] Installing dependencies...
-pip install -r requirements.txt
+"%TARGET_PY%" -m pip install -r requirements.txt
 
 echo.
 echo [3/3] Launching App...
@@ -36,6 +54,6 @@ echo.
 echo The App will open in your default browser shortly.
 echo To close, close the terminal window.
 echo.
-streamlit run app.py
+"%TARGET_PY%" -m streamlit run app.py
 
 pause

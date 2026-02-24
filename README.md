@@ -10,8 +10,14 @@
 - **作業系統**：Windows 10/11, macOS, 或 Linux。
 
 ### Windows 使用者
-1. 確保電腦已安裝 [Python 3.11](https://www.python.org/downloads/release/python-3110/)。
-2. 雙擊資料夾中的 **`run_windows.bat`**。
+**方案 A：懶人免安裝 (推薦)**
+1. 下載 [Python 3.11 Embeddable Package](https://www.python.org/downloads/release/python-3110/)。
+2. 解壓縮，將資料夾改名為 `python_embed`，放入本專案目錄。
+3. 雙擊 **`run_windows.bat`** 即可直接執行 (完全不影響您電腦的環境)。
+
+**方案 B：使用系統 Python**
+1. 確保電腦已安裝 Python 3.11。
+2. 雙擊 **`run_windows.bat`**。
 3. 程式將自動安裝套件並開啟瀏覽器。
 
 ### Mac / Linux 使用者
