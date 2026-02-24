@@ -50,7 +50,7 @@ if 'chart_settings' not in st.session_state:
 # --- API Key ---
 st.sidebar.header("🔑 啟動金鑰")
 # Sidebar Navigation
-app_mode = st.sidebar.radio("功能模組", ["📈 股市戰情室", "🧬 量化回測系統"])
+app_mode = st.sidebar.radio("功能模組", ["📈 股市戰情室", "🧬 量化回測系統", "📂 自訂策略實驗室"])
 
 st.sidebar.info("中文搜尋需 API Key。代碼搜尋 (如 2330, NVDA) 可免填。")
 
@@ -109,6 +109,95 @@ def calculate_obv(df):
 # ==========================================
 # 2. Helper Functions
 # ==========================================
+
+def render_backtest_dashboard(report):
+    """
+    通用型回測儀表板渲染函數
+    """
+    equity = getattr(report, 'creturn', None)
+    benchmark = getattr(report, 'benchmark', None)
+    drawdown = equity / equity.cummax() - 1 if equity is not None else None
+    trades = report.get_trades()
+    stats = report.get_stats()
+
+    # Core Metrics Calculation
+    cagr = stats.get('cagr', 0)
+    mdd = stats.get('max_drawdown', 0)
+    win_rate = stats.get('win_rate', 0)
+
+    # Risk/Reward Ratio
+    avg_win = trades[trades['return'] > 0]['return'].mean() if not trades.empty else 0
+    avg_loss = abs(trades[trades['return'] <= 0]['return'].mean()) if not trades.empty else 0
+    risk_reward = avg_win / avg_loss if avg_loss != 0 else 0
+
+    # Holding Period
+    avg_hold_win = trades[trades['return'] > 0]['period'].mean() if not trades.empty else 0
+    avg_hold_loss = trades[trades['return'] <= 0]['period'].mean() if not trades.empty else 0
+
+    # Exposure Time
+    exposure = (equity != equity.shift(1)).mean() if equity is not None else 0
+
+    tab1, tab2, tab3 = st.tabs(["📊 實戰戰情室 (Metrics)", "📈 資金曲線 (Chart)", "📋 交易明細 (Log)"])
+
+    with tab1:
+        st.markdown("### 🏆 核心五大戰略指標")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("🛡️ MDD", f"{mdd*100:.1f}%", "心理極限")
+        c2.metric("⚖️ 勝率/風報", f"{win_rate*100:.0f}% | {risk_reward:.1f}", "獲利引擎")
+        c3.metric("📈 CAGR", f"{cagr*100:.1f}%", "複利速度")
+        c4.metric("⏳ 持倉 (贏/輸)", f"{avg_hold_win:.0f}/{avg_hold_loss:.0f}天", "資金效率")
+        c5.metric("🛡️ 曝險", f"{exposure*100:.0f}%", "避險能力")
+
+    with tab2:
+        if equity is not None:
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                              subplot_titles=("資產權益曲線 (Equity Curve)", "資金回撤 (Drawdown)"),
+                              vertical_spacing=0.1, row_heights=[0.7, 0.3])
+
+            fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
+                                   mode='lines', name='策略報酬',
+                                   line=dict(color='#22c55e', width=2)), row=1, col=1)
+
+            if benchmark is not None:
+                 fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
+                                   mode='lines', name='大盤基準',
+                                   line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+
+            if drawdown is not None:
+                fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
+                                       mode='lines', name='回撤幅度',
+                                       line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
+
+            fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab3:
+        st.subheader("📋 詳細交易紀錄")
+        if not trades.empty:
+            trades_display = trades.copy()
+            if 'entry_date' in trades_display.columns:
+                trades_display['entry_date'] = pd.to_datetime(trades_display['entry_date'])
+
+            # CSV Download
+            csv = trades_display.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 下載交易明細 (.csv)",
+                data=csv,
+                file_name=f'trade_log_{datetime.now().strftime("%Y%m%d")}.csv',
+                mime='text/csv',
+            )
+
+            st.dataframe(
+                trades_display.style.format({
+                    'return': '{:.2%}',
+                    'mae': '{:.2%}',
+                    'mfe': '{:.2%}'
+                }, na_rep="N/A"),
+                use_container_width=True,
+                height=500
+            )
+        else:
+            st.info("無交易紀錄")
 
 def custom_metric(label, value, delta=None):
     delta_str = ""
@@ -871,6 +960,62 @@ if app_mode == "🧬 量化回測系統":
                     # Print traceback for debugging (optional, remove in prod)
                     # import traceback
                     # st.code(traceback.format_exc())
+
+elif app_mode == "📂 自訂策略實驗室":
+    st.header("📂 自訂策略實驗室 (Lab)")
+    st.info("⚠️ 注意：請確保上傳的策略程式碼來源可信。此功能將直接執行 Python 腳本。")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        # [Security Note]: Defaults are hardcoded for user convenience in local dev.
+        try:
+            default_finlab = st.secrets.get("FINLAB_API_TOKEN", "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m")
+        except:
+            default_finlab = "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m"
+        finlab_token = st.text_input("Finlab API Token", type="password", value=default_finlab)
+
+    with col2:
+        with open("template_strategy.py", "rb") as f:
+            st.download_button("📥 下載策略範本 (Template)", f, file_name="template_strategy.py", mime="text/x-python")
+
+    uploaded_file = st.file_uploader("上傳您的策略 (.py)", type=["py"])
+
+    if uploaded_file is not None:
+        if st.button("🚀 執行回測"):
+            if not finlab_token:
+                st.error("請輸入 Finlab API Token")
+            else:
+                with st.spinner("正在編譯並執行您的策略..."):
+                    try:
+                        # Save uploaded file to temp
+                        import importlib.util
+                        import sys
+
+                        temp_filename = f"temp_strategy_{int(time.time())}.py"
+                        with open(temp_filename, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+
+                        # Dynamic Import
+                        spec = importlib.util.spec_from_file_location("custom_strategy", temp_filename)
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules["custom_strategy"] = module
+                        spec.loader.exec_module(module)
+
+                        # Run Strategy
+                        if hasattr(module, 'run_strategy'):
+                            report = module.run_strategy(finlab_token)
+                            st.success("執行成功！")
+                            render_backtest_dashboard(report)
+                        else:
+                            st.error("錯誤：您的策略檔案中找不到 `run_strategy(api_token)` 函式。請參考範本。")
+
+                        # Cleanup
+                        os.remove(temp_filename)
+
+                    except Exception as e:
+                        st.error(f"執行失敗: {e}")
+                        # import traceback
+                        # st.code(traceback.format_exc())
 
 # Only show original dashboard if in Dashboard Mode
 elif app_mode == "📈 股市戰情室":
