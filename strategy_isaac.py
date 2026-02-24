@@ -63,14 +63,14 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # ==========================================
 
     # Moving Averages
-    ma20 = close.average(20)
-    ma50 = close.average(50) # Quarterly Line (Trend Definition)
-    ma60 = close.average(60)
-    ma120 = close.average(120) # Half-Year Line
+    ma20 = close.rolling(20).mean()
+    ma50 = close.rolling(50).mean() # Quarterly Line (Trend Definition)
+    ma60 = close.rolling(60).mean()
+    ma120 = close.rolling(120).mean() # Half-Year Line
 
     # Volume MA
-    vol_ma5 = vol.average(5)
-    vol_ma20 = vol.average(20)
+    vol_ma5 = vol.rolling(5).mean()
+    vol_ma20 = vol.rolling(20).mean()
 
     # RSI
     def rsi(series, period=14):
@@ -86,7 +86,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 1% Buffer Zone:
     # Bull > 1.01 * 60MA
     # Bear < 0.99 * 60MA
-    bench_ma60 = benchmark_close.average(60)
+    bench_ma60 = benchmark_close.rolling(60).mean()
     is_market_bullish = (benchmark_close > bench_ma60 * 1.01)
     is_market_bearish = (benchmark_close < bench_ma60 * 0.99)
 
@@ -278,7 +278,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     # Liquidity Filter
     # Set weight to 0 if liquidity is too low (effectively filtering it out)
-    liq_filter = (vol.average(20) > 1000000)
+    liq_filter = (vol.rolling(20).mean() > 1000000)
     final_pos = final_pos * liq_filter # Zero out illiquid stocks
 
     # Run Backtest

@@ -25,9 +25,9 @@ def run_strategy(api_token):
 
     # 2. 計算指標 (Indicators)
     # 例如：均線、RSI、成交量平均
-    ma20 = close.average(20)
-    ma60 = close.average(60)
-    vol_ma20 = vol.average(20)
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    vol_ma20 = vol.rolling(20).mean()
 
     # 3. 進場條件 (Entry Signal)
     # 範例策略：股價站上月線 (20MA) 且 站上季線 (60MA) 且 爆量

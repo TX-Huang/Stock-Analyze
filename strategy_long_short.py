@@ -15,14 +15,14 @@ def run_long_short_strategy(api_token):
     vol = data.get('price:成交股數')
 
     # 2. Indicators
-    ma20 = close.average(20)
-    ma50 = close.average(50)
-    ma150 = close.average(150)
-    ma200 = close.average(200)
+    ma20 = close.rolling(20).mean()
+    ma50 = close.rolling(50).mean()
+    ma150 = close.rolling(150).mean()
+    ma200 = close.rolling(200).mean()
 
     high250 = close.rolling(250).max().shift(1)
     low250 = close.rolling(250).min().shift(1)
-    vol_avg = vol.average(20)
+    vol_avg = vol.rolling(20).mean()
 
     daily_range = (high - low).replace(0, np.nan)
     close_pos = ((close - low) / daily_range).fillna(0)

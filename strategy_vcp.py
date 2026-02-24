@@ -16,13 +16,13 @@ def run_vcp_strategy(api_token):
     benchmark = data.get('price:收盤價')['0050']
 
     # 2. Indicators
-    ma50 = close.average(50)
-    ma150 = close.average(150)
-    ma200 = close.average(200)
+    ma50 = close.rolling(50).mean()
+    ma150 = close.rolling(150).mean()
+    ma200 = close.rolling(200).mean()
 
     high250 = close.rolling(250).max().shift(1)
     low250 = close.rolling(250).min().shift(1)
-    vol_avg = vol.average(50)
+    vol_avg = vol.rolling(50).mean()
 
     # 3. Mark Minervini's Trend Template
     cond1 = close > ma150
@@ -37,16 +37,16 @@ def run_vcp_strategy(api_token):
 
     # 5. Volatility Contraction & Dry Up (VCP Essence)
     std = close.rolling(20).std()
-    upper = close.average(20) + 2 * std
-    lower = close.average(20) - 2 * std
-    bandwidth = (upper - lower) / close.average(20)
+    upper = close.rolling(20).mean() + 2 * std
+    lower = close.rolling(20).mean() - 2 * std
+    bandwidth = (upper - lower) / close.rolling(20).mean()
 
     # Contraction: Bandwidth is in the lowest 25% of the last 60 days
     is_contracting = bandwidth < bandwidth.rolling(60).quantile(0.25)
 
     # VCP Dry Up: Volume MUST dry up before breakout.
     # Check if ANY day in the last 10 days had volume < 50% of 50-day average.
-    vol_50ma = vol.average(50)
+    vol_50ma = vol.rolling(50).mean()
     is_dry_up = (vol < vol_50ma * 0.5).rolling(10).max() > 0
 
     # 6. SMC Structure (Higher Lows)
@@ -92,7 +92,7 @@ def run_vcp_strategy(api_token):
 
     # 9. Trigger (Breakout)
     # Standard VCP Breakout: Price break 20-day high + Volume spike
-    breakout_std = (close > close.rolling(20).max().shift(1)) & (vol > vol.average(20) * 1.5)
+    breakout_std = (close > close.rolling(20).max().shift(1)) & (vol > vol.rolling(20).mean() * 1.5)
 
     # Base Setup: All Minervini Trend Templates + VCP Specifics + SMC Structure
     # Added: is_dry_up (VCP soul), is_higher_low (SMC soul)
@@ -106,7 +106,7 @@ def run_vcp_strategy(api_token):
     # 2. "Lock-in" Breakout: If institutions are locked in, we accept a smaller breakout volume or price move
     # 3. Special Enhancers: Revenue or Shadow Rejection
 
-    trigger_lock_in = is_inst_locked_in & (close > close.rolling(10).max().shift(1)) & (vol > vol.average(20))
+    trigger_lock_in = is_inst_locked_in & (close > close.rolling(10).max().shift(1)) & (vol > vol.rolling(20).mean())
     trigger_special = (cond_rev | cond_shadow | cond_chip_spike) & (close > close.rolling(10).max().shift(1))
 
     final_trigger = breakout_std | trigger_lock_in | trigger_special
