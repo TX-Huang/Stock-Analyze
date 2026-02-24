@@ -1,0 +1,8 @@
+streamlit
+finlab
+pandas
+plotly
+yfinance
+google-genai
+scipy
+graphviz
