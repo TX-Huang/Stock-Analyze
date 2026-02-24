@@ -249,15 +249,15 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     # Bonus 1: Revenue Explosion (YoY > 50%) -> +1
     cond_rev_super = (rev_growth > 50).reindex(close.index, method='ffill').fillna(False)
-    score[cond_rev_super] += 1
+    score = score + cond_rev_super.astype(int)
 
     # Bonus 2: Super Profitability (ROE > 20% OR Op Margin > 20%) -> +1
     cond_super_profit = ((roe > 20) | (op_margin > 20)).reindex(close.index, method='ffill').fillna(False)
-    score[cond_super_profit] += 1
+    score = score + cond_super_profit.astype(int)
 
     # Bonus 3: Institutional Conviction (Net Buy > 0 for 5 days) -> +1
     cond_inst_conviction = (inst_net_buy.rolling(5).min() > 0)
-    score[cond_inst_conviction] += 1
+    score = score + cond_inst_conviction.astype(int)
 
     # Cap score at 4? (1+1+1+1 = 4).
     # Finlab backtest uses the value in position dataframe as weight relative to portfolio.
