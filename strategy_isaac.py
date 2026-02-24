@@ -8,6 +8,10 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     if api_token:
         finlab.login(api_token)
 
+    # Safety casting for backtest params
+    if stop_loss is not None: stop_loss = float(stop_loss)
+    if take_profit is not None: take_profit = float(take_profit)
+
     # ==========================================
     # 1. Fetch Data
     # ==========================================
@@ -90,15 +94,30 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     is_market_bullish_series = (benchmark_close > bench_ma60 * 1.01)
     is_market_bearish_series = (benchmark_close < bench_ma60 * 0.99)
 
-    # Broadcast Series to DataFrame (to match 'close' shape)
-    # This prevents 'truth value of a Series is ambiguous' errors during logical operations with DataFrames
-    is_market_bullish = pd.DataFrame(np.repeat(is_market_bullish_series.values[:, np.newaxis], len(close.columns), axis=1),
-                                     index=is_market_bullish_series.index, columns=close.columns)
-    is_market_bullish = is_market_bullish.reindex(close.index, method='ffill').fillna(False)
+    # Broadcast Series to DataFrame (Safe Method)
+    # We use reindex logic which Finlab/Pandas handles well, avoiding manual numpy expansion which can fail on column mismatch
+    # Logic: Create a DataFrame where every column is the market series
+    # Step 1: Align series index to close index
+    aligned_bullish = is_market_bullish_series.reindex(close.index, method='ffill').fillna(False)
+    aligned_bearish = is_market_bearish_series.reindex(close.index, method='ffill').fillna(False)
 
-    is_market_bearish = pd.DataFrame(np.repeat(is_market_bearish_series.values[:, np.newaxis], len(close.columns), axis=1),
-                                     index=is_market_bearish_series.index, columns=close.columns)
-    is_market_bearish = is_market_bearish.reindex(close.index, method='ffill').fillna(False)
+    # Step 2: Broadcast to columns using a dummy operation or explicit concat
+    # Efficient way: Use an empty DF with correct shape and fill it?
+    # Or just rely on Pandas broadcasting?
+    # Actually, Pandas `series & dataframe` aligns on index.
+    # The ambiguity often comes from `if` checks or `series & dataframe` where index is not unique.
+    # Let's use explicit construction to be 100% safe.
+
+    is_market_bullish = pd.DataFrame({col: aligned_bullish for col in close.columns}, index=close.index)
+    is_market_bearish = pd.DataFrame({col: aligned_bearish for col in close.columns}, index=close.index)
+
+    # Note: If columns are too many, dict comprehension might be slow.
+    # Optimizing:
+    is_market_bullish = pd.concat([aligned_bullish]*len(close.columns), axis=1)
+    is_market_bullish.columns = close.columns
+
+    is_market_bearish = pd.concat([aligned_bearish]*len(close.columns), axis=1)
+    is_market_bearish.columns = close.columns
 
     # ==========================================
     # 3. Signal A: Small-Cap Revenue Surprise (Aggressive Growth)
