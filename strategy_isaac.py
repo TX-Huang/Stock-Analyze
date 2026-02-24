@@ -169,20 +169,34 @@ def run_isaac_strategy(api_token):
     bias_20 = (close - ma20) / ma20
     cond_bias_ok = bias_20 > -0.10
 
-    # C3. Fundamental/Chip Weakness
-    # Revenue Contraction (YoY < 0) OR Heavy Inst Selling
-    cond_bad_fund = (rev_growth < 0).reindex(close.index, method='ffill').fillna(False)
-    cond_inst_sell = inst_net_buy.rolling(3).sum() < 0 # Net sell over 3 days
+    # C3. Fundamental/Chip Weakness (The "Rotten Core" Filter)
+    # Revenue Contraction (YoY < 0)
+    cond_bad_rev = (rev_growth < 0).reindex(close.index, method='ffill').fillna(False)
+
+    # Profitability Issues: Negative EPS (Sum 4Q < 0) OR Core Business Loss (Op Income < 0)
+    cond_unprofitable = (eps.rolling(4).sum() < 0) | (op_income < 0)
+    cond_unprofitable = cond_unprofitable.reindex(close.index, method='ffill').fillna(False)
+
+    # Valuation Bubble: PE > 60 (Extreme Overvaluation)
+    cond_bubble = (pe > 60).reindex(close.index, method='ffill').fillna(False)
+
+    # Chip Weakness: Institutional Net Selling
+    cond_inst_sell = inst_net_buy.rolling(3).sum() < 0
+
+    # Combine Weakness Factors: At least one major flaw (Bad Rev, No Profit, Bubble) + Inst Selling
+    # Or just Bad Fundamentals overall
+    cond_fundamental_weakness = cond_bad_rev | cond_unprofitable | cond_bubble
 
     # C4. Rebound Failure (Black Candle eating previous gains? Simplified to Price < Open)
     cond_black_candle = close < open_
 
     # SIGNAL C TRIGGER (Only in Bear Market)
+    # Trigger: Bear Market + Weak Structure + (Fundamental Rot OR Inst Selling) + Black Candle
     signal_c_short = (
         is_market_bearish &
         cond_weak_structure &
         cond_bias_ok &
-        (cond_bad_fund | cond_inst_sell) &
+        (cond_fundamental_weakness | cond_inst_sell) &
         cond_black_candle
     )
 
