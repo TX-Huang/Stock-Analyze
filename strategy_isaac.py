@@ -37,11 +37,17 @@ def run_isaac_strategy(api_token):
         eps = data.get('finance_statement:每股盈餘')
         op_income = data.get('finance_statement:營業利益')
 
+        # Dynamic Sizing: ROE & Operating Margin
+        roe = data.get('finance_statement:權益報酬率')
+        op_margin = data.get('finance_statement:營業利益率')
+
         # Value: PE Ratio
         pe = data.get('price:本益比')
     except:
         eps = pd.DataFrame(0, index=close.index, columns=close.columns)
         op_income = pd.DataFrame(0, index=close.index, columns=close.columns)
+        roe = pd.DataFrame(0, index=close.index, columns=close.columns)
+        op_margin = pd.DataFrame(0, index=close.index, columns=close.columns)
         pe = pd.DataFrame(100, index=close.index, columns=close.columns)
 
     # Institutional Data for Short Strategy
@@ -223,24 +229,57 @@ def run_isaac_strategy(api_token):
     # 3. Profit Taking: RSI < 20 (Oversold)
     short_exits = (close > ma20) | is_market_bullish | (my_rsi < 20)
 
-    # Construct Long Position
+    # ==========================================
+    # 6. Dynamic Position Sizing (The "Bet Heavy" Logic)
+    # ==========================================
+
+    # Scoring System for Long Positions
+    # Base Score = 1
+    score = pd.DataFrame(1, index=close.index, columns=close.columns)
+
+    # Bonus 1: Revenue Explosion (YoY > 50%) -> +1
+    cond_rev_super = (rev_growth > 50).reindex(close.index, method='ffill').fillna(False)
+    score[cond_rev_super] += 1
+
+    # Bonus 2: Super Profitability (ROE > 20% OR Op Margin > 20%) -> +1
+    cond_super_profit = ((roe > 20) | (op_margin > 20)).reindex(close.index, method='ffill').fillna(False)
+    score[cond_super_profit] += 1
+
+    # Bonus 3: Institutional Conviction (Net Buy > 0 for 5 days) -> +1
+    cond_inst_conviction = (inst_net_buy.rolling(5).min() > 0)
+    score[cond_inst_conviction] += 1
+
+    # Cap score at 4? (1+1+1+1 = 4).
+    # Finlab backtest uses the value in position dataframe as weight relative to portfolio.
+    # If we put 4, and another stock has 1, the first gets 4x allocation of the second.
+    # Total portfolio is always 100% invested (if there are stocks).
+
+    # Construct Long Position with Weights
     pos_long = pd.DataFrame(np.nan, index=long_entries.index, columns=long_entries.columns)
-    pos_long[long_entries] = 1
+
+    # Initialize entries with calculated score
+    pos_long[long_entries] = score[long_entries]
+
+    # Handle Exits (Set to 0)
     pos_long[long_exits] = 0
+
+    # Fill forward: Hold position with the initial entry score?
+    # Ideally, we want to hold. ffill() propagates the last valid observation.
     pos_long = pos_long.ffill().fillna(0)
 
-    # Construct Short Position
+    # Construct Short Position (Fixed 0.5 weight for risk control)
     pos_short = pd.DataFrame(np.nan, index=short_entries.index, columns=short_entries.columns)
-    pos_short[short_entries] = -0.5 # Half position for shorts (Risk Control)
+    pos_short[short_entries] = -0.5
     pos_short[short_exits] = 0
     pos_short = pos_short.ffill().fillna(0)
 
     # Combine (Net Position)
-    # Note: A stock can't be Long and Short at same time due to Market Filter mutual exclusion.
     final_pos = pos_long + pos_short
 
     # Liquidity Filter
-    final_pos = final_pos & (vol.average(20) > 1000000)
+    # Set weight to 0 if liquidity is too low (effectively filtering it out)
+    liq_filter = (vol.average(20) > 1000000)
+    final_pos = final_pos * liq_filter # Zero out illiquid stocks
 
     # Run Backtest
     report = backtest.sim(final_pos, resample='D', name='Isaac Strategy (All-Weather)', upload=False)
