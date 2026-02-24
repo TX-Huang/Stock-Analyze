@@ -30,17 +30,37 @@ def run_long_short_strategy(api_token):
     # Liquidity
     is_liquid = vol_avg > 500000
 
+    # --- New Conditions (Fundamental, Technical, Chip) ---
+    try:
+        rev_growth = data.get('monthly_revenue:去年同月增減(%)')
+        cond_rev = (rev_growth > 30).reindex(close.index, method='ffill').fillna(False)
+    except: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
+
+    body = (close - data.get('price:開盤價')).abs()
+    lower_shadow = (data.get('price:開盤價').combine(close, min) - low)
+    cond_shadow = (close > data.get('price:開盤價')) & (lower_shadow > body * 2)
+
+    try:
+        foreign_buy = data.get('institutional_investors:外資買賣超股數')
+        trust_buy = data.get('institutional_investors:投信買賣超股數')
+        cond_chip = (foreign_buy.fillna(0) + trust_buy.fillna(0)) > 0
+    except: cond_chip = pd.DataFrame(False, index=close.index, columns=close.columns)
+
     # --- LONG LOGIC ---
     l_cond1 = (ma50 > ma150) & (ma150 > ma200)
     l_cond2 = (close > ma50) & (close > ma150) & (close > ma200)
     l_cond3 = close > (low250 * 1.30)
-    # Refined price range for Long
     l_cond4 = (close >= high250 * 0.85) & (close <= high250 * 1.05)
     l_cond5 = ma200 > ma200.shift(20)
     l_cond6 = vol > (vol_avg * 1.5)
     l_cond7 = close_pos >= 0.75
 
-    buy_signal = l_cond1 & l_cond2 & l_cond3 & l_cond4 & l_cond5 & l_cond6 & l_cond7 & is_liquid
+    # Enhanced Long Buy
+    long_base = l_cond1 & l_cond2 & l_cond5 & is_liquid
+    long_trigger_std = l_cond3 & l_cond4 & l_cond6 & l_cond7
+    long_trigger_special = (cond_rev | cond_shadow | cond_chip) & (close > ma20)
+
+    buy_signal = long_base & (long_trigger_std | (long_trigger_special & (close >= high250 * 0.9)))
     # Relaxed Long Exit: Close < 50MA
     long_exit = close < ma50
 

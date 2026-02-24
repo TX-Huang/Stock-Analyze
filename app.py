@@ -796,6 +796,15 @@ if app_mode == "🧬 量化回測系統":
 
                             trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
 
+                            # CSV Download
+                            csv = trades_final.to_csv(index=False).encode('utf-8-sig')
+                            st.download_button(
+                                label="📥 下載交易明細 (.csv)",
+                                data=csv,
+                                file_name=f'trade_log_{strategy_type}_{datetime.now().strftime("%Y%m%d")}.csv',
+                                mime='text/csv',
+                            )
+
                             # Formatting style function
                             def highlight_ret(val):
                                 color = ''

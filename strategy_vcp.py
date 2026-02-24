@@ -50,12 +50,32 @@ def run_vcp_strategy(api_token):
     # 7. Liquidity Filter (Updated to match others)
     is_liquid = vol_avg > 500000
 
-    # 8. Trigger (Breakout)
-    breakout = (close > close.rolling(20).max().shift(1)) & (vol > vol.average(20) * 1.5)
+    # --- New Conditions (Fundamental, Technical, Chip) ---
+    try:
+        rev_growth = data.get('monthly_revenue:去年同月增減(%)')
+        cond_rev = (rev_growth > 30).reindex(close.index, method='ffill').fillna(False)
+    except: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
 
-    buy_signal = (cond1 & cond2 & cond3 & cond4 & cond5 &
-                  cond6 & cond7 &
-                  is_contracting & rs_rating & is_liquid & breakout)
+    body = (close - data.get('price:開盤價')).abs()
+    lower_shadow = (data.get('price:開盤價').combine(close, min) - low)
+    cond_shadow = (close > data.get('price:開盤價')) & (lower_shadow > body * 2)
+
+    try:
+        foreign_buy = data.get('institutional_investors:外資買賣超股數')
+        trust_buy = data.get('institutional_investors:投信買賣超股數')
+        cond_chip = (foreign_buy.fillna(0) + trust_buy.fillna(0)) > 0
+    except: cond_chip = pd.DataFrame(False, index=close.index, columns=close.columns)
+
+    # 8. Trigger (Breakout)
+    breakout_std = (close > close.rolling(20).max().shift(1)) & (vol > vol.average(20) * 1.5)
+
+    # VCP is strict on pattern (cond1-cond7 + contracting + RS), so we add new factors as enhancers to the TRIGGER
+    base_setup = cond1 & cond2 & cond3 & cond4 & cond5 & cond6 & cond7 & is_contracting & rs_rating & is_liquid
+
+    # Trigger: Standard Breakout OR (Special Signal + Breakout of Resistance)
+    trigger = breakout_std | ((cond_rev | cond_shadow | cond_chip) & (close > close.rolling(10).max().shift(1)))
+
+    buy_signal = base_setup & trigger
 
     # 9. Exit Strategy (Optimized)
     # Relaxed from 20MA to 50MA to allow trend to ride
