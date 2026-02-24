@@ -2,7 +2,6 @@
 finlab
 pandas
 scipy
-pandas_ta
 
 # 外部市場數據撈取
 yfinance
