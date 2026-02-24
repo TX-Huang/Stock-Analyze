@@ -87,8 +87,18 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # Bull > 1.01 * 60MA
     # Bear < 0.99 * 60MA
     bench_ma60 = benchmark_close.rolling(60).mean()
-    is_market_bullish = (benchmark_close > bench_ma60 * 1.01)
-    is_market_bearish = (benchmark_close < bench_ma60 * 0.99)
+    is_market_bullish_series = (benchmark_close > bench_ma60 * 1.01)
+    is_market_bearish_series = (benchmark_close < bench_ma60 * 0.99)
+
+    # Broadcast Series to DataFrame (to match 'close' shape)
+    # This prevents 'truth value of a Series is ambiguous' errors during logical operations with DataFrames
+    is_market_bullish = pd.DataFrame(np.repeat(is_market_bullish_series.values[:, np.newaxis], len(close.columns), axis=1),
+                                     index=is_market_bullish_series.index, columns=close.columns)
+    is_market_bullish = is_market_bullish.reindex(close.index, method='ffill').fillna(False)
+
+    is_market_bearish = pd.DataFrame(np.repeat(is_market_bearish_series.values[:, np.newaxis], len(close.columns), axis=1),
+                                     index=is_market_bearish_series.index, columns=close.columns)
+    is_market_bearish = is_market_bearish.reindex(close.index, method='ffill').fillna(False)
 
     # ==========================================
     # 3. Signal A: Small-Cap Revenue Surprise (Aggressive Growth)
