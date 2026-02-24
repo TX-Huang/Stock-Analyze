@@ -31,6 +31,19 @@ def run_isaac_strategy(api_token):
         rev_current = pd.DataFrame(0, index=close.index, columns=close.columns)
         capital = pd.DataFrame(10000000, index=close.index, columns=close.columns) # Dummy large capital
 
+    # Financials for Fundamental Shield (Quality/Value)
+    try:
+        # Quality: EPS & Operating Income
+        eps = data.get('finance_statement:每股盈餘')
+        op_income = data.get('finance_statement:營業利益')
+
+        # Value: PE Ratio
+        pe = data.get('price:本益比')
+    except:
+        eps = pd.DataFrame(0, index=close.index, columns=close.columns)
+        op_income = pd.DataFrame(0, index=close.index, columns=close.columns)
+        pe = pd.DataFrame(100, index=close.index, columns=close.columns)
+
     # Institutional Data for Short Strategy
     try:
         foreign_buy = data.get('institutional_investors:外資買賣超股數').fillna(0)
@@ -83,20 +96,32 @@ def run_isaac_strategy(api_token):
     cond_rev_strong = (rev_growth > 30) | (rev_current >= rev_12m_max)
     cond_rev_strong = cond_rev_strong.reindex(close.index, method='ffill').fillna(False)
 
-    # A3. Technical Trend (VCP-lite)
+    # A3. Fundamental Shield (Quality & Value) - NEW!
+    # Quality: Profitable (Sum of last 4Q EPS > 0) AND Core Business Profitable (Op Income > 0)
+    cond_profitable = (eps.rolling(4).sum() > 0) & (op_income > 0)
+    cond_profitable = cond_profitable.reindex(close.index, method='ffill').fillna(False)
+
+    # Value: Not too expensive (PE < 30)
+    cond_value_safe = (pe < 30) & (pe > 0) # PE > 0 implies earnings > 0 too
+    cond_value_safe = cond_value_safe.reindex(close.index, method='ffill').fillna(False)
+
+    # A4. Technical Trend (VCP-lite)
     cond_trend = (close > ma20) & (close > ma60)
 
-    # A4. VCP Dry Up
+    # A5. VCP Dry Up
     is_dry_up = (vol < vol_ma20 * 0.5).rolling(5).max() > 0
 
-    # A5. Breakout
+    # A6. Breakout
     breakout = (close > close.rolling(20).max().shift(1)) & (vol > vol_ma5 * 1.5)
 
     # SIGNAL A TRIGGER (Only in Bull Market)
+    # Added Shield: cond_profitable & cond_value_safe
     signal_a = (
         is_market_bullish &
         cond_small_cap &
         cond_rev_strong &
+        cond_profitable &
+        cond_value_safe &
         cond_trend &
         breakout
     )
