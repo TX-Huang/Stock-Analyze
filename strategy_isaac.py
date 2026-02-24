@@ -8,7 +8,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     if api_token:
         finlab.login(api_token)
 
-    # Safety casting for backtest params
     if stop_loss is not None: stop_loss = float(stop_loss)
     if take_profit is not None: take_profit = float(take_profit)
 
@@ -21,31 +20,22 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     low = data.get('price:最低價')
     vol = data.get('price:成交股數')
 
-    # Benchmark for Market Filter (0050 ETF as proxy for TAIEX)
     benchmark_close = data.get('price:收盤價')['0050']
 
-    # Financials for Small-Cap Strategy
     try:
-        rev_growth = data.get('monthly_revenue:去年同月增減(%)') # Monthly Revenue YoY
+        rev_growth = data.get('monthly_revenue:去年同月增減(%)')
         rev_current = data.get('monthly_revenue:當月營收')
-        capital = data.get('finance_statement:股本') # Capital stock
+        capital = data.get('finance_statement:股本')
     except:
-        # Fallback if fundamental data missing (use price only)
         rev_growth = pd.DataFrame(0, index=close.index, columns=close.columns)
         rev_current = pd.DataFrame(0, index=close.index, columns=close.columns)
-        capital = pd.DataFrame(10000000, index=close.index, columns=close.columns) # Dummy large capital
+        capital = pd.DataFrame(10000000, index=close.index, columns=close.columns)
 
-    # Financials for Fundamental Shield (Quality/Value)
     try:
-        # Quality: EPS & Operating Income
         eps = data.get('finance_statement:每股盈餘')
         op_income = data.get('finance_statement:營業利益')
-
-        # Dynamic Sizing: ROE & Operating Margin
         roe = data.get('finance_statement:權益報酬率')
         op_margin = data.get('finance_statement:營業利益率')
-
-        # Value: PE Ratio
         pe = data.get('price:本益比')
     except:
         eps = pd.DataFrame(0, index=close.index, columns=close.columns)
@@ -54,7 +44,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         op_margin = pd.DataFrame(0, index=close.index, columns=close.columns)
         pe = pd.DataFrame(100, index=close.index, columns=close.columns)
 
-    # Institutional Data for Short Strategy
     try:
         foreign_buy = data.get('institutional_investors:外資買賣超股數').fillna(0)
         trust_buy = data.get('institutional_investors:投信買賣超股數').fillna(0)
@@ -63,20 +52,16 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         inst_net_buy = pd.DataFrame(0, index=close.index, columns=close.columns)
 
     # ==========================================
-    # 2. Indicators & Market Filter
+    # 2. Indicators (Pandas Calculation)
     # ==========================================
-
-    # Moving Averages
     ma20 = close.rolling(20).mean()
-    ma50 = close.rolling(50).mean() # Quarterly Line (Trend Definition)
+    ma50 = close.rolling(50).mean()
     ma60 = close.rolling(60).mean()
-    ma120 = close.rolling(120).mean() # Half-Year Line
+    ma120 = close.rolling(120).mean()
 
-    # Volume MA
     vol_ma5 = vol.rolling(5).mean()
     vol_ma20 = vol.rolling(20).mean()
 
-    # RSI
     def rsi(series, period=14):
         delta = series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -85,239 +70,187 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         return 100 - (100 / (1 + rs))
     my_rsi = rsi(close, 14)
 
-    # Market Regime Filter (Red Light / Green Light)
-    # Strategy works best when Market > 60MA (Quarterly)
-    # 1% Buffer Zone:
-    # Bull > 1.01 * 60MA
-    # Bear < 0.99 * 60MA
     bench_ma60 = benchmark_close.rolling(60).mean()
-    is_market_bullish_series = (benchmark_close > bench_ma60 * 1.01)
-    is_market_bearish_series = (benchmark_close < bench_ma60 * 0.99)
 
-    # Broadcast Series to DataFrame (Safe Method)
-    # We use reindex logic which Finlab/Pandas handles well, avoiding manual numpy expansion which can fail on column mismatch
-    # Logic: Create a DataFrame where every column is the market series
-    # Step 1: Align series index to close index
-    aligned_bullish = is_market_bullish_series.reindex(close.index, method='ffill').fillna(False)
-    aligned_bearish = is_market_bearish_series.reindex(close.index, method='ffill').fillna(False)
-
-    # Step 2: Broadcast to columns using a dummy operation or explicit concat
-    # Efficient way: Use an empty DF with correct shape and fill it?
-    # Or just rely on Pandas broadcasting?
-    # Actually, Pandas `series & dataframe` aligns on index.
-    # The ambiguity often comes from `if` checks or `series & dataframe` where index is not unique.
-    # Let's use explicit construction to be 100% safe.
-
-    is_market_bullish = pd.DataFrame({col: aligned_bullish for col in close.columns}, index=close.index)
-    is_market_bearish = pd.DataFrame({col: aligned_bearish for col in close.columns}, index=close.index)
-
-    # Note: If columns are too many, dict comprehension might be slow.
-    # Optimizing:
-    is_market_bullish = pd.concat([aligned_bullish]*len(close.columns), axis=1)
-    is_market_bullish.columns = close.columns
-
-    is_market_bearish = pd.concat([aligned_bearish]*len(close.columns), axis=1)
-    is_market_bearish.columns = close.columns
-
-    # ==========================================
-    # 3. Signal A: Small-Cap Revenue Surprise (Aggressive Growth)
-    # ==========================================
-
-    # A1. Small Capital (< 20 Billion TWD = 200 億 => 2,000,000 k)
-    cond_small_cap = capital < 2000000
-
-    # A2. Revenue Explosion
+    # Pre-calculate Helpers
     rev_12m_max = rev_current.rolling(12).max()
-    cond_rev_strong = (rev_growth > 30) | (rev_current >= rev_12m_max)
-    cond_rev_strong = cond_rev_strong.reindex(close.index, method='ffill').fillna(False)
+    close_max_20 = close.rolling(20).max().shift(1)
 
-    # A3. Fundamental Shield (Quality & Value) - NEW!
-    # Quality: Profitable (Sum of last 4Q EPS > 0) AND Core Business Profitable (Op Income > 0)
-    cond_profitable = (eps.rolling(4).sum() > 0) & (op_income > 0)
-    cond_profitable = cond_profitable.reindex(close.index, method='ffill').fillna(False)
+    # Fill NaNs for safety
+    def safe_df(df):
+        return df.reindex(close.index, method='ffill').fillna(0)
 
-    # Value: Not too expensive (PE < 30)
-    cond_value_safe = (pe < 30) & (pe > 0) # PE > 0 implies earnings > 0 too
-    cond_value_safe = cond_value_safe.reindex(close.index, method='ffill').fillna(False)
-
-    # A4. Technical Trend (VCP-lite)
-    cond_trend = (close > ma20) & (close > ma60)
-
-    # A5. VCP Dry Up
-    is_dry_up = (vol < vol_ma20 * 0.5).rolling(5).max() > 0
-
-    # A6. Breakout
-    breakout = (close > close.rolling(20).max().shift(1)) & (vol > vol_ma5 * 1.5)
-
-    # SIGNAL A TRIGGER (Only in Bull Market)
-    # Added Shield: cond_profitable & cond_value_safe
-    signal_a = (
-        is_market_bullish &
-        cond_small_cap &
-        cond_rev_strong &
-        cond_profitable &
-        cond_value_safe &
-        cond_trend &
-        breakout
-    )
+    rev_growth = safe_df(rev_growth)
+    rev_current = safe_df(rev_current)
+    rev_12m_max = safe_df(rev_12m_max)
+    capital = safe_df(capital)
+    eps_sum = safe_df(eps.rolling(4).sum())
+    op_income = safe_df(op_income)
+    roe = safe_df(roe)
+    op_margin = safe_df(op_margin)
+    pe = safe_df(pe)
+    inst_net_buy = safe_df(inst_net_buy)
 
     # ==========================================
-    # 4. Signal B: Mean Reversion (Deep Value / Panic Buy)
+    # 3. NumPy Extraction (The Nuclear Option)
     # ==========================================
+    # Extract values to bypass Pandas index alignment checks
+    v_close = close.values
+    v_open = open_.values
+    v_low = low.values
+    v_vol = vol.values
 
-    # B1. Deep Discount
-    cond_oversold_trend = close < ma120
+    v_ma20 = ma20.values
+    v_ma60 = ma60.values
+    v_ma120 = ma120.values
+    v_vol_ma5 = vol_ma5.values
+    v_vol_ma20 = vol_ma20.values
+    v_rsi = my_rsi.values
 
-    # B2. RSI Extreme (< 20)
-    cond_rsi_panic = my_rsi < 20
+    v_rev_growth = rev_growth.values
+    v_rev_current = rev_current.values
+    v_rev_12m_max = rev_12m_max.values
+    v_capital = capital.values
+    v_eps_sum = eps_sum.values
+    v_op_income = op_income.values
+    v_pe = pe.values
+    v_roe = roe.values
+    v_op_margin = op_margin.values
+    v_inst_net_buy = inst_net_buy.values
+    v_close_max_20 = close_max_20.values
 
-    # B3. Reversal Candle (Hammer)
-    body = (close - open_).abs()
-    lower_shadow = (close.combine(open_, min) - low)
-    cond_hammer = lower_shadow > (body * 2)
+    # Market Trend Broadcast (Manually)
+    v_bench = benchmark_close.values
+    v_bench_ma60 = bench_ma60.values
 
-    # B4. Volume Spike
-    cond_vol_panic = vol > (vol_ma20 * 2)
-
-    # SIGNAL B TRIGGER (Bull Market Only - catching dips)
-    # Actually, Mean Reversion works best when Market is Bullish but Stock is temporarily dead.
-    # In Bear Market, buying dips is dangerous (catching falling knives).
-    signal_b = (
-        is_market_bullish &
-        cond_oversold_trend &
-        cond_rsi_panic &
-        cond_hammer &
-        cond_vol_panic
-    )
-
-    # ==========================================
-    # 5. Signal C: Bear Hunter (Short Selling)
-    # ==========================================
-
-    # C1. Weak Structure
-    # Price < 60MA AND Price < 20MA
-    cond_weak_structure = (close < ma60) & (close < ma20)
-
-    # C2. Bias Filter (Not too oversold)
-    # Bias = (Price - 20MA) / 20MA
-    # We want to short when Price is close to MA (Bias > -10%), not when it's already crashed (-30%)
-    bias_20 = (close - ma20) / ma20
-    cond_bias_ok = bias_20 > -0.10
-
-    # C3. Fundamental/Chip Weakness (The "Rotten Core" Filter)
-    # Revenue Contraction (YoY < 0)
-    cond_bad_rev = (rev_growth < 0).reindex(close.index, method='ffill').fillna(False)
-
-    # Profitability Issues: Negative EPS (Sum 4Q < 0) OR Core Business Loss (Op Income < 0)
-    cond_unprofitable = (eps.rolling(4).sum() < 0) | (op_income < 0)
-    cond_unprofitable = cond_unprofitable.reindex(close.index, method='ffill').fillna(False)
-
-    # Valuation Bubble: PE > 60 (Extreme Overvaluation)
-    cond_bubble = (pe > 60).reindex(close.index, method='ffill').fillna(False)
-
-    # Chip Weakness: Institutional Net Selling
-    cond_inst_sell = inst_net_buy.rolling(3).sum() < 0
-
-    # Combine Weakness Factors: At least one major flaw (Bad Rev, No Profit, Bubble) + Inst Selling
-    # Or just Bad Fundamentals overall
-    cond_fundamental_weakness = cond_bad_rev | cond_unprofitable | cond_bubble
-
-    # C4. Rebound Failure (Black Candle eating previous gains? Simplified to Price < Open)
-    cond_black_candle = close < open_
-
-    # SIGNAL C TRIGGER (Only in Bear Market)
-    # Trigger: Bear Market + Weak Structure + (Fundamental Rot OR Inst Selling) + Black Candle
-    signal_c_short = (
-        is_market_bearish &
-        cond_weak_structure &
-        cond_bias_ok &
-        (cond_fundamental_weakness | cond_inst_sell) &
-        cond_black_candle
-    )
+    # Create Market Masks (Shape: Time x 1) -> Broadcast to (Time x Stocks)
+    # Reshape to (N, 1) for broadcasting
+    v_bullish = (v_bench > v_bench_ma60 * 1.01).reshape(-1, 1)
+    v_bearish = (v_bench < v_bench_ma60 * 0.99).reshape(-1, 1)
 
     # ==========================================
-    # 6. Position Management
+    # 4. Logic Execution (Pure Math)
     # ==========================================
 
-    # Long Entries
-    long_entries = signal_a | signal_b
+    # --- Signal A: Growth ---
+    # Small Cap
+    c_small = v_capital < 2000000
+    # Rev Strong
+    c_rev = (v_rev_growth > 30) | (v_rev_current >= v_rev_12m_max)
+    # Profitable
+    c_profit = (v_eps_sum > 0) & (v_op_income > 0)
+    # Value Safe
+    c_value = (v_pe < 30) & (v_pe > 0)
+    # Trend
+    c_trend = (v_close > v_ma20) & (v_close > v_ma60)
+    # Breakout
+    c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
-    # Long Exits
-    # 1. Trend Break: Close < 20MA (Aggressive)
-    # 2. Market Bearish Turn: Benchmark < 60MA
-    # Exception: Deep Value Hold (Signal B)
-    is_deep_value = (close < ma120) & (my_rsi < 40)
-    long_exits = ((close < ma20) | is_market_bearish) & (~is_deep_value)
+    sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout
 
-    # Short Entries
-    short_entries = signal_c_short
+    # --- Signal B: Reversion ---
+    c_oversold = v_close < v_ma120
+    c_rsi_panic = v_rsi < 20
+    c_vol_panic = v_vol > v_vol_ma20 * 2
 
-    # Short Exits (Cover)
-    # 1. Trend Reversal: Close > 20MA
-    # 2. Market Bullish Turn: Benchmark > 60MA
-    # 3. Profit Taking: RSI < 20 (Oversold)
-    short_exits = (close > ma20) | is_market_bullish | (my_rsi < 20)
+    # Hammer Logic
+    body = np.abs(v_close - v_open)
+    lower_shadow = np.minimum(v_close, v_open) - v_low
+    c_hammer = lower_shadow > (body * 2)
+
+    sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic
+
+    # --- Signal C: Short ---
+    c_weak = (v_close < v_ma60) & (v_close < v_ma20)
+    bias = (v_close - v_ma20) / v_ma20
+    c_bias = bias > -0.10
+
+    # Short Filters
+    c_bad_rev = v_rev_growth < 0
+    c_bad_profit = (v_eps_sum < 0) | (v_op_income < 0)
+    c_bubble = v_pe > 60
+
+    # Inst Sell logic (Need rolling sum of numpy array? Or just use pre-calc DF)
+    # To keep it simple in numpy, assume inst_net_buy is already rolling sum?
+    # No, it was daily. Let's pre-calc rolling sum in Pandas first.
+    # Re-fetch rolling inst
+    inst_rolling = inst_net_buy.rolling(3).sum().fillna(0).values
+    c_inst_sell = inst_rolling < 0
+
+    c_bad_fund = c_bad_rev | c_bad_profit | c_bubble
+    c_black = v_close < v_open
+
+    sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black
 
     # ==========================================
-    # 6. Dynamic Position Sizing (The "Bet Heavy" Logic)
+    # 5. Position Reconstruction
     # ==========================================
 
-    # Scoring System for Long Positions
-    # Base Score = 1
-    score = pd.DataFrame(1, index=close.index, columns=close.columns)
+    # Combine signals
+    long_entries = sig_a | sig_b
+    short_entries = sig_c
 
-    # Bonus 1: Revenue Explosion (YoY > 50%) -> +1
-    cond_rev_super = (rev_growth > 50).reindex(close.index, method='ffill').fillna(False)
-    score = score + cond_rev_super.astype(int)
+    # Exits
+    # is_deep_value = (close < ma120) & (my_rsi < 40)
+    c_deep = (v_close < v_ma120) & (v_rsi < 40)
 
-    # Bonus 2: Super Profitability (ROE > 20% OR Op Margin > 20%) -> +1
-    cond_super_profit = ((roe > 20) | (op_margin > 20)).reindex(close.index, method='ffill').fillna(False)
-    score = score + cond_super_profit.astype(int)
+    # Long Exit: Close < 20MA OR Bearish, unless Deep Value
+    long_exits = ((v_close < v_ma20) | v_bearish) & (~c_deep)
 
-    # Bonus 3: Institutional Conviction (Net Buy > 0 for 5 days) -> +1
-    cond_inst_conviction = (inst_net_buy.rolling(5).min() > 0)
-    score = score + cond_inst_conviction.astype(int)
+    # Short Exit: Close > 20MA OR Bullish OR RSI < 20
+    short_exits = (v_close > v_ma20) | v_bullish | (v_rsi < 20)
 
-    # Cap score at 4? (1+1+1+1 = 4).
-    # Finlab backtest uses the value in position dataframe as weight relative to portfolio.
-    # If we put 4, and another stock has 1, the first gets 4x allocation of the second.
-    # Total portfolio is always 100% invested (if there are stocks).
+    # --- Scoring (Numpy) ---
+    score = np.ones_like(v_close)
+    score += (v_rev_growth > 50).astype(int)
+    score += ((v_roe > 20) | (v_op_margin > 20)).astype(int)
 
-    # Construct Long Position with Weights
-    pos_long = pd.DataFrame(np.nan, index=long_entries.index, columns=long_entries.columns)
+    # Inst Streak (Rolling min > 0)
+    # Pre-calc in Pandas
+    inst_streak = (inst_net_buy.rolling(5).min() > 0).fillna(False).values
+    score += inst_streak.astype(int)
 
-    # Initialize entries with calculated score
-    pos_long[long_entries] = score[long_entries]
+    # --- Final Logic Loop (Simulation) ---
+    # We need to simulate holding because vectorized ffill on signals is tricky with multiple states
+    # But for Finlab compatibility, we usually return a DataFrame of target weights.
 
-    # Handle Exits (Set to 0)
-    pos_long[long_exits] = 0
+    # Vectorized Position Construction
+    # 1. Create Entry Signal Mask (Weight)
+    # 2. Create Exit Signal Mask (0)
+    # 3. Fill forward
 
-    # Fill forward: Hold position with the initial entry score?
-    # Ideally, we want to hold. ffill() propagates the last valid observation.
-    pos_long = pos_long.ffill().fillna(0)
+    # To mix Long/Short in one DF:
+    # Use 1 for Long, -0.5 for Short
 
-    # Construct Short Position (Fixed 0.5 weight for risk control)
-    pos_short = pd.DataFrame(np.nan, index=short_entries.index, columns=short_entries.columns)
-    pos_short[short_entries] = -0.5
-    pos_short[short_exits] = 0
-    pos_short = pos_short.ffill().fillna(0)
+    target_pos = np.zeros_like(v_close)
 
-    # Combine (Net Position)
-    final_pos = pos_long + pos_short
+    # Simple state machine simulation is hard in pure numpy without loop.
+    # But Pandas ffill works well. Let's put back to Pandas for ffill.
+
+    df_long = pd.DataFrame(np.nan, index=close.index, columns=close.columns)
+    df_short = pd.DataFrame(np.nan, index=close.index, columns=close.columns)
+
+    # Map Numpy back to DF
+    # We use boolean indexing on DF directly now that logic is clean
+    # Actually, we can just assign based on numpy bool arrays
+
+    df_long[:] = np.where(long_entries, score, np.nan)
+    df_long[long_exits] = 0
+    df_long = df_long.ffill().fillna(0)
+
+    df_short[:] = np.where(short_entries, -0.5, np.nan)
+    df_short[short_exits] = 0
+    df_short = df_short.ffill().fillna(0)
+
+    final_pos = df_long + df_short
 
     # Liquidity Filter
-    # Set weight to 0 if liquidity is too low (effectively filtering it out)
-    liq_filter = (vol.rolling(20).mean() > 1000000)
-    final_pos = final_pos * liq_filter # Zero out illiquid stocks
+    v_liq = (v_vol_ma20 > 1000000)
+    # Apply filter (Zero out if illiquid)
+    final_pos = final_pos * v_liq
 
     # Run Backtest
-    # Check if stop_loss or take_profit override is active (for Grid Search)
     if stop_loss is not None or take_profit is not None:
-        # Finlab backtest.sim supports stop_loss and take_profit params
-        # Note: Position management above already has some exit logic.
-        # Ideally, we should apply SL/TP on top.
-        # But vectorization makes it hard to mix logic.
-        # Finlab's built-in SL/TP applies to each trade.
         report = backtest.sim(
             final_pos,
             resample='D',
