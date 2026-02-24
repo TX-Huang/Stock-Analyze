@@ -728,6 +728,12 @@ if app_mode == "🧬 量化回測系統":
 
         run_btn = st.button("🔬 執行回測 (Run Backtest)", use_container_width=True, type="primary")
 
+    # Session State Logic for Report Persistence
+    if 'backtest_report' not in st.session_state:
+        st.session_state.backtest_report = None
+    if 'current_strategy' not in st.session_state:
+        st.session_state.current_strategy = None
+
     if run_btn:
         if not finlab_token:
             st.error("請輸入 Finlab API Token")
@@ -750,216 +756,224 @@ if app_mode == "🧬 量化回測系統":
 
                     st.success("回測完成！")
 
-                    # === Data Preparation ===
-                    equity = getattr(report, 'creturn', None)
-                    benchmark = getattr(report, 'benchmark', None)
-                    drawdown = equity / equity.cummax() - 1 if equity is not None else None
-                    trades = report.get_trades()
-                    stats = report.get_stats()
-
-                    # Core Metrics Calculation
-                    cagr = stats.get('cagr', 0)
-                    mdd = stats.get('max_drawdown', 0)
-                    win_rate = stats.get('win_rate', 0)
-
-                    # Risk/Reward Ratio
-                    avg_win = trades[trades['return'] > 0]['return'].mean() if not trades.empty else 0
-                    avg_loss = abs(trades[trades['return'] <= 0]['return'].mean()) if not trades.empty else 0
-                    risk_reward = avg_win / avg_loss if avg_loss != 0 else 0
-
-                    # Holding Period
-                    avg_hold_win = trades[trades['return'] > 0]['period'].mean() if not trades.empty else 0
-                    avg_hold_loss = trades[trades['return'] <= 0]['period'].mean() if not trades.empty else 0
-
-                    # Exposure Time (Proxy: days with position / total days)
-                    exposure = (equity != equity.shift(1)).mean() if equity is not None else 0
-
-                    # === Tab Layout ===
-                    tab1, tab2, tab3 = st.tabs(["📊 實戰戰情室 (Core Metrics)", "🛡️ 參數強健性 (Stress Test)", "📋 交易明細 (Trades)"])
-
-                    with tab1:
-                        # Big 5 Core Metrics Display
-                        st.markdown("### 🏆 核心五大戰略指標")
-
-                        col1, col2, col3, col4, col5 = st.columns(5)
-
-                        with col1:
-                            st.metric("🛡️ 心理極限 (MDD)", f"{mdd*100:.1f}%", help="最大資金回撤：你能承受的痛")
-                        with col2:
-                            st.metric("⚖️ 獲利引擎 (勝率/風報)", f"{win_rate*100:.0f}% | {risk_reward:.1f}", help="賠1塊賺幾塊？")
-                        with col3:
-                            st.metric("📈 真實複利 (CAGR)", f"{cagr*100:.1f}%", help="年化報酬率：資產翻倍速度")
-                        with col4:
-                            st.metric("⏳ 資金效率 (贏/輸天數)", f"{avg_hold_win:.0f} / {avg_hold_loss:.0f} 天", help="贏家抱多久 vs 輸家跑多快")
-                        with col5:
-                            st.metric("🛡️ 避險能力 (曝險)", f"{exposure*100:.0f}%", help="資金留在市場的時間比例")
-
-                        st.markdown("---")
-
-                        # Charts
-                        if equity is not None:
-                            fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                              subplot_titles=("資產權益曲線 (Equity Curve)", "資金回撤 (Drawdown)"),
-                                              vertical_spacing=0.1, row_heights=[0.7, 0.3])
-
-                            fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
-                                                   mode='lines', name='策略報酬',
-                                                   line=dict(color='#22c55e', width=2)), row=1, col=1)
-
-                            if benchmark is not None:
-                                 fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
-                                                   mode='lines', name='大盤基準',
-                                                   line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
-
-                            if drawdown is not None:
-                                fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
-                                                       mode='lines', name='回撤幅度',
-                                                       line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
-
-                            fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10))
-                            st.plotly_chart(fig, use_container_width=True)
-
-                    with tab2:
-                        st.subheader("🛡️ 參數強健性掃描 (Stress Test)")
-                        st.info("此功能將執行多次回測，以檢驗策略在不同停損/停利參數下的穩定性。請耐心等待。")
-
-                        c_p1, c_p2 = st.columns(2)
-                        stop_loss_range = c_p1.slider("停損範圍 (%)", 5, 15, (8, 12))
-                        take_profit_range = c_p2.slider("停利範圍 (%)", 15, 40, (20, 30))
-
-                        if st.button("🔥 開始壓力測試 (Run Grid Search)"):
-                            if "Isaac" not in strategy_type:
-                                st.warning("目前僅支援 Isaac 策略進行參數掃描。")
-                            else:
-                                import strategy_isaac
-                                results = []
-                                sl_steps = range(stop_loss_range[0], stop_loss_range[1]+1, 2)
-                                tp_steps = range(take_profit_range[0], take_profit_range[1]+1, 5)
-
-                                progress_bar = st.progress(0)
-                                total_steps = len(sl_steps) * len(tp_steps)
-                                step_count = 0
-
-                                for sl in sl_steps:
-                                    for tp in tp_steps:
-                                        # Run strategy with overrides (We need to modify strategy to accept args)
-                                        # For now, we simulate or pass args if implemented.
-                                        # Let's assume strategy_isaac.run_isaac_strategy accepts kwargs
-                                        try:
-                                            # Note: We need to update strategy_isaac.py to accept sl/tp
-                                            rep = strategy_isaac.run_isaac_strategy(finlab_token, stop_loss=sl/100, take_profit=tp/100)
-                                            stats_grid = rep.get_stats()
-                                            results.append({
-                                                'Stop Loss': sl,
-                                                'Take Profit': tp,
-                                                'CAGR': stats_grid.get('cagr', 0),
-                                                'Sharpe': stats_grid.get('sharpe', 0)
-                                            })
-                                        except Exception as e:
-                                            print(e)
-
-                                        step_count += 1
-                                        progress_bar.progress(step_count / total_steps)
-
-                                df_grid = pd.DataFrame(results)
-                                if not df_grid.empty:
-                                    pivot_table = df_grid.pivot(index='Stop Loss', columns='Take Profit', values='CAGR')
-                                    fig_heat = px.imshow(pivot_table,
-                                                       labels=dict(x="Take Profit (%)", y="Stop Loss (%)", color="CAGR"),
-                                                       color_continuous_scale='RdYlGn',
-                                                       text_auto='.1%')
-                                    st.plotly_chart(fig_heat, use_container_width=True)
-                                    st.success("壓力測試完成！請尋找紅色的高原區 (Plateau)。")
-
-                    with tab3:
-                        st.subheader("📋 詳細交易紀錄 (Trade Log)")
-                        if not trades.empty:
-                            rename_map = {
-                                "stock_id": "股票代碼",
-                                "entry_date": "進場日期",
-                                "exit_date": "出場日期",
-                                "entry_price": "進場價",
-                                "exit_price": "出場價",
-                                "return": "報酬率",
-                                "mae": "最大不利(MAE)",
-                                "mfe": "最大有利(MFE)",
-                                "period": "持有天數"
-                            }
-
-                            trades_display = trades.copy()
-                            trades_display.rename(columns=rename_map, inplace=True)
-
-                            # Ensure entry_date is datetime
-                            if '進場日期' in trades_display.columns:
-                                trades_display['進場日期'] = pd.to_datetime(trades_display['進場日期'])
-
-                            # === Date Filter ===
-                            min_date = trades_display['進場日期'].min().date()
-                            max_date = trades_display['進場日期'].max().date()
-
-                            c_filter1, c_filter2 = st.columns(2)
-                            start_date = c_filter1.date_input("開始日期", value=max_date - timedelta(days=365), min_value=min_date, max_value=max_date)
-                            end_date = c_filter2.date_input("結束日期", value=max_date, min_value=min_date, max_value=max_date)
-
-                            # Filter Data
-                            trades_filtered = trades_display[
-                                (trades_display['進場日期'].dt.date >= start_date) &
-                                (trades_display['進場日期'].dt.date <= end_date)
-                            ]
-
-                            # === Pagination ===
-                            items_per_page = 1000
-                            total_items = len(trades_filtered)
-                            total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
-
-                            page = st.number_input("頁數 (Page)", min_value=1, max_value=total_pages, value=1)
-                            start_idx = (page - 1) * items_per_page
-                            end_idx = min(start_idx + items_per_page, total_items)
-
-                            st.info(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
-
-                            # Select relevant columns
-                            available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
-                            cols_to_show = [c for c in available_cols if c in trades_filtered.columns]
-
-                            trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
-
-                            # CSV Download
-                            csv = trades_final.to_csv(index=False).encode('utf-8-sig')
-                            st.download_button(
-                                label="📥 下載交易明細 (.csv)",
-                                data=csv,
-                                file_name=f'trade_log_{strategy_type}_{datetime.now().strftime("%Y%m%d")}.csv',
-                                mime='text/csv',
-                            )
-
-                            # Formatting style function
-                            def highlight_ret(val):
-                                color = ''
-                                if pd.isna(val): return ''
-                                if isinstance(val, (int, float)):
-                                    color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
-                                return color
-
-                            st.dataframe(
-                                trades_final.style.format({
-                                    '報酬率': '{:.2%}',
-                                    '最大不利(MAE)': '{:.2%}',
-                                    '最大有利(MFE)': '{:.2%}',
-                                    '進場價': '{:.2f}',
-                                    '出場價': '{:.2f}'
-                                }, na_rep="N/A").map(highlight_ret, subset=['報酬率']),
-                                use_container_width=True,
-                                height=600
-                            )
-                        else:
-                            st.info("無交易紀錄")
+                    # Store in Session State
+                    st.session_state.backtest_report = report
+                    st.session_state.current_strategy = strategy_type
 
                 except Exception as e:
                     st.error(f"回測執行發生錯誤: {e}")
-                    # Print traceback for debugging (optional, remove in prod)
-                    # import traceback
-                    # st.code(traceback.format_exc())
+
+    # Render Report from Session State
+    if st.session_state.backtest_report is not None:
+        report = st.session_state.backtest_report
+
+        # Clear previous report if strategy changed (Optional, but safer to keep current)
+        # We rely on user clicking Run again to update.
+
+        # === Data Preparation ===
+        equity = getattr(report, 'creturn', None)
+        benchmark = getattr(report, 'benchmark', None)
+        drawdown = equity / equity.cummax() - 1 if equity is not None else None
+        trades = report.get_trades()
+        stats = report.get_stats()
+
+        # Core Metrics Calculation
+        cagr = stats.get('cagr', 0)
+        mdd = stats.get('max_drawdown', 0)
+        win_rate = stats.get('win_rate', 0)
+
+        # Risk/Reward Ratio
+        avg_win = trades[trades['return'] > 0]['return'].mean() if not trades.empty else 0
+        avg_loss = abs(trades[trades['return'] <= 0]['return'].mean()) if not trades.empty else 0
+        risk_reward = avg_win / avg_loss if avg_loss != 0 else 0
+
+        # Holding Period
+        avg_hold_win = trades[trades['return'] > 0]['period'].mean() if not trades.empty else 0
+        avg_hold_loss = trades[trades['return'] <= 0]['period'].mean() if not trades.empty else 0
+
+        # Exposure Time (Proxy: days with position / total days)
+        exposure = (equity != equity.shift(1)).mean() if equity is not None else 0
+
+        # === Tab Layout ===
+        tab1, tab2, tab3 = st.tabs(["📊 實戰戰情室 (Core Metrics)", "🛡️ 參數強健性 (Stress Test)", "📋 交易明細 (Trades)"])
+
+        with tab1:
+            # Big 5 Core Metrics Display
+            st.markdown("### 🏆 核心五大戰略指標")
+
+            col1, col2, col3, col4, col5 = st.columns(5)
+
+            with col1:
+                st.metric("🛡️ 心理極限 (MDD)", f"{mdd*100:.1f}%", help="最大資金回撤：你能承受的痛")
+            with col2:
+                st.metric("⚖️ 獲利引擎 (勝率/風報)", f"{win_rate*100:.0f}% | {risk_reward:.1f}", help="賠1塊賺幾塊？")
+            with col3:
+                st.metric("📈 真實複利 (CAGR)", f"{cagr*100:.1f}%", help="年化報酬率：資產翻倍速度")
+            with col4:
+                st.metric("⏳ 資金效率 (贏/輸天數)", f"{avg_hold_win:.0f} / {avg_hold_loss:.0f} 天", help="贏家抱多久 vs 輸家跑多快")
+            with col5:
+                st.metric("🛡️ 避險能力 (曝險)", f"{exposure*100:.0f}%", help="資金留在市場的時間比例")
+
+            st.markdown("---")
+
+            # Charts
+            if equity is not None:
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                  subplot_titles=("資產權益曲線 (Equity Curve)", "資金回撤 (Drawdown)"),
+                                  vertical_spacing=0.1, row_heights=[0.7, 0.3])
+
+                fig.add_trace(go.Scatter(x=equity.index, y=equity.values,
+                                       mode='lines', name='策略報酬',
+                                       line=dict(color='#22c55e', width=2)), row=1, col=1)
+
+                if benchmark is not None:
+                     fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
+                                       mode='lines', name='大盤基準',
+                                       line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+
+                if drawdown is not None:
+                    fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,
+                                           mode='lines', name='回撤幅度',
+                                           line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
+
+                fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+        with tab2:
+            st.subheader("🛡️ 參數強健性掃描 (Stress Test)")
+            st.info("此功能將執行多次回測，以檢驗策略在不同停損/停利參數下的穩定性。請耐心等待。")
+
+            c_p1, c_p2 = st.columns(2)
+            stop_loss_range = c_p1.slider("停損範圍 (%)", 5, 15, (8, 12))
+            take_profit_range = c_p2.slider("停利範圍 (%)", 15, 40, (20, 30))
+
+            if st.button("🔥 開始壓力測試 (Run Grid Search)"):
+                if "Isaac" not in strategy_type:
+                    st.warning("目前僅支援 Isaac 策略進行參數掃描。")
+                else:
+                    import strategy_isaac
+                    results = []
+                    sl_steps = range(stop_loss_range[0], stop_loss_range[1]+1, 2)
+                    tp_steps = range(take_profit_range[0], take_profit_range[1]+1, 5)
+
+                    progress_bar = st.progress(0)
+                    total_steps = len(sl_steps) * len(tp_steps)
+                    step_count = 0
+
+                    for sl in sl_steps:
+                        for tp in tp_steps:
+                            # Run strategy with overrides (We need to modify strategy to accept args)
+                            # For now, we simulate or pass args if implemented.
+                            # Let's assume strategy_isaac.run_isaac_strategy accepts kwargs
+                            try:
+                                # Note: We need to update strategy_isaac.py to accept sl/tp
+                                rep = strategy_isaac.run_isaac_strategy(finlab_token, stop_loss=sl/100, take_profit=tp/100)
+                                stats_grid = rep.get_stats()
+                                results.append({
+                                    'Stop Loss': sl,
+                                    'Take Profit': tp,
+                                    'CAGR': stats_grid.get('cagr', 0),
+                                    'Sharpe': stats_grid.get('sharpe', 0)
+                                })
+                            except Exception as e:
+                                print(e)
+
+                            step_count += 1
+                            progress_bar.progress(step_count / total_steps)
+
+                    df_grid = pd.DataFrame(results)
+                    if not df_grid.empty:
+                        pivot_table = df_grid.pivot(index='Stop Loss', columns='Take Profit', values='CAGR')
+                        fig_heat = px.imshow(pivot_table,
+                                           labels=dict(x="Take Profit (%)", y="Stop Loss (%)", color="CAGR"),
+                                           color_continuous_scale='RdYlGn',
+                                           text_auto='.1%')
+                        st.plotly_chart(fig_heat, use_container_width=True)
+                        st.success("壓力測試完成！請尋找紅色的高原區 (Plateau)。")
+
+        with tab3:
+            st.subheader("📋 詳細交易紀錄 (Trade Log)")
+            if not trades.empty:
+                rename_map = {
+                    "stock_id": "股票代碼",
+                    "entry_date": "進場日期",
+                    "exit_date": "出場日期",
+                    "entry_price": "進場價",
+                    "exit_price": "出場價",
+                    "return": "報酬率",
+                    "mae": "最大不利(MAE)",
+                    "mfe": "最大有利(MFE)",
+                    "period": "持有天數"
+                }
+
+                trades_display = trades.copy()
+                trades_display.rename(columns=rename_map, inplace=True)
+
+                # Ensure entry_date is datetime
+                if '進場日期' in trades_display.columns:
+                    trades_display['進場日期'] = pd.to_datetime(trades_display['進場日期'])
+
+                # === Date Filter ===
+                min_date = trades_display['進場日期'].min().date()
+                max_date = trades_display['進場日期'].max().date()
+
+                c_filter1, c_filter2 = st.columns(2)
+                start_date = c_filter1.date_input("開始日期", value=max_date - timedelta(days=365), min_value=min_date, max_value=max_date)
+                end_date = c_filter2.date_input("結束日期", value=max_date, min_value=min_date, max_value=max_date)
+
+                # Filter Data
+                trades_filtered = trades_display[
+                    (trades_display['進場日期'].dt.date >= start_date) &
+                    (trades_display['進場日期'].dt.date <= end_date)
+                ]
+
+                # === Pagination ===
+                items_per_page = 1000
+                total_items = len(trades_filtered)
+                total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
+
+                page = st.number_input("頁數 (Page)", min_value=1, max_value=total_pages, value=1)
+                start_idx = (page - 1) * items_per_page
+                end_idx = min(start_idx + items_per_page, total_items)
+
+                st.info(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
+
+                # Select relevant columns
+                available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
+                cols_to_show = [c for c in available_cols if c in trades_filtered.columns]
+
+                trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
+
+                # CSV Download
+                csv = trades_final.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 下載交易明細 (.csv)",
+                    data=csv,
+                    file_name=f'trade_log_{strategy_type}_{datetime.now().strftime("%Y%m%d")}.csv',
+                    mime='text/csv',
+                )
+
+                # Formatting style function
+                def highlight_ret(val):
+                    color = ''
+                    if pd.isna(val): return ''
+                    if isinstance(val, (int, float)):
+                        color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
+                    return color
+
+                st.dataframe(
+                    trades_final.style.format({
+                        '報酬率': '{:.2%}',
+                        '最大不利(MAE)': '{:.2%}',
+                        '最大有利(MFE)': '{:.2%}',
+                        '進場價': '{:.2f}',
+                        '出場價': '{:.2f}'
+                    }, na_rep="N/A").map(highlight_ret, subset=['報酬率']),
+                    use_container_width=True,
+                    height=600
+                )
+            else:
+                st.info("無交易紀錄")
 
 elif app_mode == "📂 自訂策略實驗室":
     st.header("📂 自訂策略實驗室 (Lab)")
