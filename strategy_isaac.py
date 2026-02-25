@@ -163,27 +163,40 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 4. Logic Execution (Pure Math)
     # ==========================================
 
+    # Data Integrity Checks (Prevent trading on zero-filled missing data)
+    # MA > 0 check ensures we have valid moving averages (not early days or missing data)
+    has_ma20 = v_ma20 > 0
+    has_ma60 = v_ma60 > 0
+    has_ma120 = v_ma120 > 0
+
     # Market Masks
     # v_bench and v_bench_ma60 are (T, 1)
-    v_bullish = (v_bench > v_bench_ma60 * 1.01)
-    v_bearish = (v_bench < v_bench_ma60 * 0.99)
+    # If benchmark MA is 0, v_bullish will be True (0 > 0 * 1.01 is False, wait)
+    # v_bench > 0 check
+    v_bullish = (v_bench > v_bench_ma60 * 1.01) & (v_bench_ma60 > 0)
+    v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0)
 
     # Liquidity Filter
     v_liq = (v_vol_ma20 > 1000000)
 
     # --- Signal A: Growth ---
-    c_small = v_capital < 2000000 # Unit? Assuming Finlab units
+    # Fix: Capital < 2M check also needs Capital > 0 to avoid missing data being flagged as small cap
+    c_small = (v_capital < 2000000) & (v_capital > 0)
+
     c_rev = (v_rev_growth > 30) | (v_rev_current >= v_rev_12m_max)
     c_profit = (v_eps_sum > 0) & (v_op_income > 0)
     c_value = (v_pe < 30) & (v_pe > 0)
-    c_trend = (v_close > v_ma20) & (v_close > v_ma60)
+
+    # Fix: Check MAs > 0
+    c_trend = (v_close > v_ma20) & (v_close > v_ma60) & has_ma20 & has_ma60
+
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
     sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq
     print(f"[DEBUG] Signal A Triggers: {np.sum(sig_a)}")
 
     # --- Signal B: Reversion ---
-    c_oversold = v_close < v_ma120
+    c_oversold = (v_close < v_ma120) & has_ma120
     c_rsi_panic = v_rsi < 20
     c_vol_panic = v_vol > v_vol_ma20 * 2
 
@@ -195,8 +208,8 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     print(f"[DEBUG] Signal B Triggers: {np.sum(sig_b)}")
 
     # --- Signal C: Short ---
-    c_weak = (v_close < v_ma60) & (v_close < v_ma20)
-    bias = (v_close - v_ma20) / (v_ma20 + 1e-9) # Prevent div/0
+    c_weak = (v_close < v_ma60) & (v_close < v_ma20) & has_ma20 & has_ma60
+    bias = (v_close - v_ma20) / (v_ma20 + 1e-9)
     c_bias = bias > -0.10
 
     c_bad_rev = v_rev_growth < 0
