@@ -17,11 +17,14 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # Master Data - 定義宇宙與時間軸
     close = data.get('price:收盤價')
 
+    # [Fix for Pandas/Finlab Compatibility]:
+    # Force close.columns to be string type immediately.
+    # Some environments return CategoricalIndex which causes crashes during reindex/backtest.
+    close.columns = close.columns.astype(str)
+
     # 用於對齊的標準索引 (Master Index)
     master_index = close.index
-    # [Fix for Pandas Compatibility]: Ensure columns are strings, not CategoricalIndex
-    # This prevents TypeError: (CategoricalDtype...) during reindex on some Pandas versions
-    master_columns = close.columns.astype(str)
+    master_columns = close.columns # Now guaranteed to be Index(dtype='object')
 
     # 輔助函數：將所有資料對齊到 (時間 x 股票) 或 (時間 x 1)，並轉為 NumPy 陣列
     def to_numpy(obj, is_benchmark=False):
@@ -30,10 +33,12 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
             obj = obj.reindex(master_index, method='ffill')
             return obj.fillna(0).values.reshape(-1, 1)
         elif isinstance(obj, pd.DataFrame):
-            # 對齊索引。假設股票數據的欄位與 close 相同。
-            # 如果不是，應該重新對齊欄位，但 data.get 通常回傳完整宇宙。
-            # 為了安全，如果是股票數據，我們重新對齊欄位。
+            # Aggressively sanitize columns to match master_columns type (str)
             if not is_benchmark:
+                # If columns are Categorical or different type, cast to str
+                if not obj.columns.equals(master_columns):
+                    obj.columns = obj.columns.astype(str)
+
                 obj = obj.reindex(index=master_index, columns=master_columns, method='ffill')
             else:
                 obj = obj.reindex(index=master_index, method='ffill')
