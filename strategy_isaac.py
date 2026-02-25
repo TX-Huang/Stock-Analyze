@@ -166,11 +166,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     has_ma120 = v_ma120 > 0
 
     # 市場狀態濾網
-    # v_bench 和 v_bench_ma60 形狀為 (T, 1)
-    # 如果大盤 MA 為 0，v_bullish 會是 False (因為 0 > 0 * 1.01 是 False，安全)
-    # 加入 v_bench_ma60 > 0 更保險
+    # [Fix 1]: Ensure v_bench > 0 to prevent false exits on missing data
     v_bullish = (v_bench > v_bench_ma60 * 1.01) & (v_bench_ma60 > 0)
-    v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0)
+    v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0) & (v_bench > 0)
 
     # 流動性濾網
     v_liq = (v_vol_ma20 > 1000000)
@@ -201,7 +199,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq
 
-    # --- 訊號 C: 放空 (Short) ---
+    # --- 訊號 C: 放空 (Short) - DISABLED BY DEFAULT ---
+    # [Fix 3]: Temporarily disable shorting to prevent extreme losses (-99% MDD)
+    # The logic is commented out by setting sig_c to False
     c_weak = (v_close < v_ma60) & (v_close < v_ma20) & has_ma20 & has_ma60
     bias = (v_close - v_ma20) / (v_ma20 + 1e-9)
     c_bias = bias > -0.10
@@ -214,7 +214,8 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_bad_fund = c_bad_rev | c_bad_profit | c_bubble
     c_black = v_close < v_open
 
-    sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black & v_liq
+    # sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black & v_liq
+    sig_c = np.zeros_like(v_close, dtype=bool) # Disable shorting
 
     # ==========================================
     # 5. 部位重建 (Position Reconstruction)
@@ -224,9 +225,23 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     short_entries = sig_c
 
     # 出場條件
+    # [Fix 2]: Reversion Hold Logic - Allow bounce until RSI > 50 or Stop Loss hit
+    # Hold if: (Price < MA60) AND (RSI < 50)
     c_reversion_hold = (v_close < v_ma60) & (v_rsi < 50)
 
-    long_exits = ((v_close < v_ma20) & (~c_reversion_hold)) | v_bearish
+    # [Fix 4]: Relaxed Trend Exit - Change from MA20 to MA60 to reduce churn
+    # Trend Exit: Close < MA60 (Trend Change)
+    # Reversion Exit: If NOT holding, exit.
+
+    # Logic:
+    # If it was a Trend Trade (Sig A): Exit if Close < MA60 OR Market Bearish
+    # If it was a Reversion Trade (Sig B): Exit if RSI > 50 (Take Profit) OR Close < MA60 (Trend continuation down)
+
+    # Simplified Exit: Close < MA60 is the main trend filter.
+    # Bearish market forces exit.
+
+    # [Fix 2 applied]: Don't exit if holding due to reversion logic
+    long_exits = ((v_close < v_ma60) & (~c_reversion_hold)) | v_bearish
     short_exits = (v_close > v_ma20) | v_bullish | (v_rsi < 20)
 
     # 評分權重
