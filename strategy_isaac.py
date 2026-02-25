@@ -152,7 +152,10 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # Breakout
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
-    sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout
+    # Liquidity Filter
+    v_liq = (v_vol_ma20 > 1000000)
+
+    sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq
     print(f"[DEBUG] Signal A Triggers: {np.sum(sig_a)}")
 
     # --- Signal B: Reversion ---
@@ -165,7 +168,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     lower_shadow = np.minimum(v_close, v_open) - v_low
     c_hammer = lower_shadow > (body * 2)
 
-    sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic
+    sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq
     print(f"[DEBUG] Signal B Triggers: {np.sum(sig_b)}")
 
     # --- Signal C: Short ---
@@ -188,7 +191,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_bad_fund = c_bad_rev | c_bad_profit | c_bubble
     c_black = v_close < v_open
 
-    sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black
+    sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black & v_liq
     print(f"[DEBUG] Signal C Triggers: {np.sum(sig_c)}")
 
     # ==========================================
@@ -285,10 +288,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     final_pos = df_long + df_short
 
-    # Liquidity Filter
-    v_liq = (v_vol_ma20 > 1000000)
-    # Apply filter (Zero out if illiquid)
-    final_pos = final_pos * v_liq
+    # Liquidity Filter (Applied to Entries ONLY)
+    # We moved this check to signal generation to prevent exiting during VCP dry-up.
+    # final_pos = final_pos * v_liq  <-- REMOVED to allow holding during low volume
 
     # Run Backtest
     if stop_loss is not None or take_profit is not None:
