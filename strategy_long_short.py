@@ -36,9 +36,13 @@ def run_long_short_strategy(api_token):
         cond_rev = (rev_growth > 30).reindex(close.index, method='ffill').fillna(False)
     except: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
 
-    body = (close - data.get('price:開盤價')).abs()
-    lower_shadow = (data.get('price:開盤價').combine(close, min) - low)
-    cond_shadow = (close > data.get('price:開盤價')) & (lower_shadow > body * 2)
+    try:
+        open_price = data.get('price:開盤價')
+        body = (close - open_price).abs()
+        lower_shadow = (open_price.combine(close, min) - low)
+        cond_shadow = (close > open_price) & (lower_shadow > body * 2)
+    except:
+        cond_shadow = pd.DataFrame(False, index=close.index, columns=close.columns)
 
     try:
         foreign_buy = data.get('institutional_investors:外資買賣超股數')
