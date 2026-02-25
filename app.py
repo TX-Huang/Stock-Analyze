@@ -185,6 +185,90 @@ def calculate_structural_lines(df, lookback=100):
 
     return structure
 
+def calculate_pattern_convergence(df, peaks, troughs):
+    """
+    計算型態收斂與結構轉折區間 (2/3 ~ 3/4)
+    Apex Convergence & Reversal Zone
+    """
+    # 確保取得有效的索引
+    p_idx = peaks.dropna().index
+    t_idx = troughs.dropna().index
+
+    # 至少需要兩個高點與兩個低點來定義趨勢
+    if len(p_idx) < 2 or len(t_idx) < 2: return None
+
+    # 取最後兩個主要轉折點
+    p1_idx, p2_idx = p_idx[-2], p_idx[-1]
+    t1_idx, t2_idx = t_idx[-2], t_idx[-1]
+
+    p1_val, p2_val = peaks[p1_idx], peaks[p2_idx]
+    t1_val, t2_val = troughs[t1_idx], troughs[t2_idx]
+
+    # 轉換為數值索引 (0, 1, 2...)
+    x_p1, x_p2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
+    x_t1, x_t2 = df.index.get_loc(t1_idx), df.index.get_loc(t2_idx)
+
+    # 避免垂直線 (x相同)
+    if x_p2 == x_p1 or x_t2 == x_t1: return None
+
+    # 計算斜率 (m) 與 截距 (c)
+    # Highs: Resistance Line
+    m_p = (p2_val - p1_val) / (x_p2 - x_p1)
+    c_p = p1_val - m_p * x_p1
+
+    # Lows: Support Line
+    m_t = (t2_val - t1_val) / (x_t2 - x_t1)
+    c_t = t1_val - m_t * x_t1
+
+    # 檢查是否收斂
+    # 如果斜率非常接近 (平行)，視為通道而非收斂三角形
+    if abs(m_p - m_t) < 1e-4: return None
+
+    # 計算交點 x (Apex)
+    # m_p * x + c_p = m_t * x + c_t
+    # x * (m_p - m_t) = c_t - c_p
+    x_int = (c_t - c_p) / (m_p - m_t)
+
+    # 定義型態起始點 (取四點中最早的)
+    x_start = min(x_p1, x_t1)
+
+    # 計算型態總長度
+    length = x_int - x_start
+
+    # 交點必須在未來相對於起始點 (且最好不要是反向發散)
+    # 若 length < 0 代表交點在過去 (發散型態)，此處主要抓收斂突破
+    # 若 user 想要擴散型態，需另外處理。這裡針對 "收斂末端"
+    if length <= 10: return None # 太短或發散
+
+    # 計算關鍵區間 (2/3 ~ 3/4)
+    x_zone_start = x_start + length * 0.66
+    x_zone_end = x_start + length * 0.75
+
+    return {
+        "x_int": x_int,
+        "y_int": m_p * x_int + c_p,
+        "x_start": x_start,
+        "x_zone_start": x_zone_start,
+        "x_zone_end": x_zone_end,
+        "m_p": m_p, "c_p": c_p, # 壓力線參數
+        "m_t": m_t, "c_t": c_t  # 支撐線參數
+    }
+
+def get_date_from_index(idx, df, is_weekly):
+    """Helper to project future dates from index"""
+    if idx < 0: idx = 0
+    if idx < len(df):
+        return df.index[int(idx)]
+    else:
+        # 推算未來日期
+        extra_units = idx - len(df) + 1
+        last_date = df.index[-1]
+        # 簡單推算：日線+1天(不含週末略估)，週線+7天
+        # 為了準確繪圖，使用 pd.Timedelta
+        days_per_unit = 7 if is_weekly else 1.4 # 1.4 for business days approx
+        delta = timedelta(days=int(extra_units * days_per_unit))
+        return last_date + delta
+
 def render_backtest_dashboard(report):
     """
     通用型回測儀表板渲染函數
@@ -722,6 +806,47 @@ def render_trend_chart(df, patterns, market, is_box=False, height=900, is_weekly
                 fig.add_hline(y=lvl['price'], line_dash="solid", line_color=color, line_width=width, opacity=0.5,
                              annotation_text=f"S/R: {lvl['price']:.1f}", annotation_position="top right", row=1, col=1)
 
+            # 3. [New] 型態收斂與轉折區 (Pattern Convergence)
+            conv = calculate_pattern_convergence(df, df['peaks'], df['troughs'])
+            if conv:
+                # 繪製延伸線直到 Apex
+                # 我們需要找到對應的日期
+                apex_date = get_date_from_index(conv['x_int'], df, is_weekly)
+
+                # 繪製壓力線 (Highs)
+                # p_y1 = m_p * x_curr + c_p -> 但我們直接畫到 Apex
+                curr_idx = len(df) - 1
+                curr_date = df.index[-1]
+
+                # 從最新的點畫到 Apex
+                fig.add_trace(go.Scatter(
+                    x=[curr_date, apex_date],
+                    y=[conv['m_p'] * curr_idx + conv['c_p'], conv['y_int']],
+                    mode='lines', line=dict(color='red', width=1, dash='dashdot'), name='結構壓力延伸'
+                ), row=1, col=1)
+
+                # 繪製支撐線 (Lows)
+                fig.add_trace(go.Scatter(
+                    x=[curr_date, apex_date],
+                    y=[conv['m_t'] * curr_idx + conv['c_t'], conv['y_int']],
+                    mode='lines', line=dict(color='green', width=1, dash='dashdot'), name='結構支撐延伸'
+                ), row=1, col=1)
+
+                # 4. 繪製轉折熱區 (2/3 ~ 3/4)
+                z_start_date = get_date_from_index(conv['x_zone_start'], df, is_weekly)
+                z_end_date = get_date_from_index(conv['x_zone_end'], df, is_weekly)
+
+                y_range_max = df['High'].max()
+                y_range_min = df['Low'].min()
+
+                fig.add_vrect(
+                    x0=z_start_date, x1=z_end_date,
+                    fillcolor="gold", opacity=0.15,
+                    layer="below", line_width=0,
+                    annotation_text="結構翻轉區 (2/3~3/4)", annotation_position="top left",
+                    row=1, col=1
+                )
+
         if st.session_state.chart_settings['bbands'] and 'BB_Upper' in df.columns:
             fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='gray', width=1, dash='dot'), name='BB上軌'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='gray', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(200,200,200,0.1)', name='BB下軌'), row=1, col=1)
@@ -1067,7 +1192,6 @@ if app_mode == "🧬 量化回測系統":
 
                 # CSV Download (Full Data)
                 # Use the filtered but UN-PAGINATED data for download
-                # [FIX]: Indentation corrected to be inside `if not trades.empty:`
                 csv = trades_filtered.to_csv(index=False).encode('utf-8-sig')
                 st.download_button(
                     label="📥 下載完整交易明細 (.csv)",
