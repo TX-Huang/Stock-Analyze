@@ -18,6 +18,7 @@ import requests
 import graphviz
 import numpy as np
 from scipy.signal import argrelextrema
+from scipy.stats import linregress
 
 # --- Config ---
 st.set_page_config(page_title="Alpha Global v93.0", layout="wide", page_icon="📈")
@@ -44,7 +45,8 @@ if 'chart_settings' not in st.session_state:
         "patterns": True, "ghost_lines": True,
         "volume_strict": True,
         "rounding": True, "fan": True, "wedge": True, "broadening": True,
-        "diamond": True, "bbands": True, "macd": True, "kd": True
+        "diamond": True, "bbands": True, "macd": True, "kd": True,
+        "structure": True # New Setting
     }
 
 # --- API Key ---
@@ -57,11 +59,11 @@ st.sidebar.info("中文搜尋需 API Key。代碼搜尋 (如 2330, NVDA) 可免�
 # [Security Note]: Defaults are hardcoded for user convenience in local dev.
 # In production, use .streamlit/secrets.toml or env vars.
 try:
-    default_gemini = st.secrets.get("GEMINI_API_KEY", "AIzaSyD9MytPig5KB6Xl4wyyRDGJZJee7p4vf3k")
+    default_gemini = st.secrets.get("GEMINI_API_KEY", "")
 except FileNotFoundError:
-    default_gemini = "AIzaSyD9MytPig5KB6Xl4wyyRDGJZJee7p4vf3k"
+    default_gemini = ""
 except Exception:
-    default_gemini = "AIzaSyD9MytPig5KB6Xl4wyyRDGJZJee7p4vf3k"
+    default_gemini = ""
 
 api_key = st.sidebar.text_input("輸入 Gemini API Key", type="password", value=default_gemini)
 
@@ -109,6 +111,79 @@ def calculate_obv(df):
 # ==========================================
 # 2. Helper Functions
 # ==========================================
+
+def calculate_structural_lines(df, lookback=100):
+    """
+    計算長期結構線：
+    1. 線性回歸通道 (Linear Regression Channel)
+    2. 主要支撐/壓力位 (Major S/R Levels)
+    """
+    structure = {"channel": None, "levels": []}
+    if len(df) < 30: return structure
+
+    # 限制回看週期
+    data = df.tail(lookback).copy()
+    if data.empty: return structure
+
+    # 1. 通道計算 (High+Low)/2
+    data['Mid'] = (data['High'] + data['Low']) / 2
+    x = np.arange(len(data))
+
+    try:
+        slope, intercept, r_value, p_value, std_err = linregress(x, data['Mid'])
+
+        # 計算殘差與標準差
+        line = slope * x + intercept
+        residuals = data['Mid'] - line
+        std_resid = np.std(residuals)
+
+        # 定義通道 (2倍標準差)
+        upper_line = line + 2 * std_resid
+        lower_line = line - 2 * std_resid
+
+        structure["channel"] = {
+            "slope": slope,
+            "intercept": intercept,
+            "std": std_resid,
+            "x_start": data.index[0],
+            "x_end": data.index[-1],
+            "y_start_mid": line[0],
+            "y_end_mid": line[-1],
+            "y_start_upper": upper_line[0],
+            "y_end_upper": upper_line[-1],
+            "y_start_lower": lower_line[0],
+            "y_end_lower": lower_line[-1]
+        }
+    except: pass
+
+    # 2. 主要支撐壓力 (Pivot Clustering)
+    n = 20 # 較大的週期找大底/大頂
+    data['peaks'] = data.iloc[argrelextrema(data.High.values, np.greater_equal, order=n)[0]]['High']
+    data['troughs'] = data.iloc[argrelextrema(data.Low.values, np.less_equal, order=n)[0]]['Low']
+
+    pivots = pd.concat([data['peaks'].dropna(), data['troughs'].dropna()])
+    if not pivots.empty:
+        pivots = pivots.sort_values()
+        # 分群 (2% 誤差內視為同一層級)
+        clusters = []
+        if len(pivots) > 0:
+            current_cluster = [pivots.iloc[0]]
+            for p in pivots.iloc[1:]:
+                if (p - current_cluster[-1]) / current_cluster[-1] < 0.02:
+                    current_cluster.append(p)
+                else:
+                    clusters.append(current_cluster)
+                    current_cluster = [p]
+            clusters.append(current_cluster)
+
+        # 過濾有效層級 (至少觸碰 2 次)
+        for c in clusters:
+            if len(c) >= 2:
+                avg_price = np.mean(c)
+                strength = len(c)
+                structure["levels"].append({"price": avg_price, "strength": strength})
+
+    return structure
 
 def render_backtest_dashboard(report):
     """
@@ -179,22 +254,60 @@ def render_backtest_dashboard(report):
                 trades_display['entry_date'] = pd.to_datetime(trades_display['entry_date'])
 
             # CSV Download
-            csv = trades_display.to_csv(index=False).encode('utf-8-sig')
+            # Use the filtered but UN-PAGINATED data for download
+            # [FIX]: Indentation corrected to be inside `if not trades.empty:`
+            csv = trades_filtered.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📥 下載交易明細 (.csv)",
+                label="📥 下載完整交易明細 (.csv)",
                 data=csv,
                 file_name=f'trade_log_{datetime.now().strftime("%Y%m%d")}.csv',
                 mime='text/csv',
             )
 
+            # === Pagination ===
+            items_per_page = 1000
+            total_items = len(trades_filtered)
+            total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
+
+            page = st.number_input("頁數 (Page)", min_value=1, max_value=total_pages, value=1)
+            start_idx = (page - 1) * items_per_page
+            end_idx = min(start_idx + items_per_page, total_items)
+
+            st.info(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
+
+            # Select relevant columns
+            available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
+            cols_to_show = [c for c in available_cols if c in trades_filtered.columns]
+
+            trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
+
+            # CSV Download (Page)
+            csv = trades_final.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 下載交易明細 (.csv)",
+                data=csv,
+                file_name=f'trade_log_{strategy_type}_{datetime.now().strftime("%Y%m%d")}.csv',
+                mime='text/csv',
+            )
+
+            # Formatting style function
+            def highlight_ret(val):
+                color = ''
+                if pd.isna(val): return ''
+                if isinstance(val, (int, float)):
+                    color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
+                return color
+
             st.dataframe(
-                trades_display.style.format({
-                    'return': '{:.2%}',
-                    'mae': '{:.2%}',
-                    'mfe': '{:.2%}'
-                }, na_rep="N/A"),
+                trades_final.style.format({
+                    '報酬率': '{:.2%}',
+                    '最大不利(MAE)': '{:.2%}',
+                    '最大有利(MFE)': '{:.2%}',
+                    '進場價': '{:.2f}',
+                    '出場價': '{:.2f}'
+                }, na_rep="N/A").map(highlight_ret, subset=['報酬率']),
                 use_container_width=True,
-                height=500
+                height=600
             )
         else:
             st.info("無交易紀錄")
@@ -585,6 +698,30 @@ def render_trend_chart(df, patterns, market, is_box=False, height=900, is_weekly
         fig.add_trace(go.Scatter(x=df.index, y=df[ma_s], line=dict(color='orange', width=1), name=f'{ma_s}'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df[ma_l], line=dict(color='blue', width=1), name=f'{ma_l}'), row=1, col=1)
 
+        # 結構分析線 (Structural Analysis)
+        if st.session_state.chart_settings.get('structure', True):
+            structure = calculate_structural_lines(df, lookback=100)
+
+            # 1. 繪製回歸通道 (Channel)
+            ch = structure.get('channel')
+            if ch:
+                # 中軌
+                fig.add_trace(go.Scatter(x=[ch['x_start'], ch['x_end']], y=[ch['y_start_mid'], ch['y_end_mid']],
+                                       mode='lines', line=dict(color='blue', width=1, dash='dash'), name='回歸中軌'), row=1, col=1)
+                # 上軌
+                fig.add_trace(go.Scatter(x=[ch['x_start'], ch['x_end']], y=[ch['y_start_upper'], ch['y_end_upper']],
+                                       mode='lines', line=dict(color='blue', width=1, dash='dot'), name='回歸上軌'), row=1, col=1)
+                # 下軌
+                fig.add_trace(go.Scatter(x=[ch['x_start'], ch['x_end']], y=[ch['y_start_lower'], ch['y_end_lower']],
+                                       mode='lines', line=dict(color='blue', width=1, dash='dot'), name='回歸下軌'), row=1, col=1)
+
+            # 2. 繪製水平支撐壓力 (Levels)
+            for lvl in structure.get('levels', []):
+                color = 'red' if lvl['price'] > df['Close'].iloc[-1] else 'green' # 壓力紅，支撐綠
+                width = min(lvl['strength'] * 0.5, 3) # 強度決定線粗細
+                fig.add_hline(y=lvl['price'], line_dash="solid", line_color=color, line_width=width, opacity=0.5,
+                             annotation_text=f"S/R: {lvl['price']:.1f}", annotation_position="top right", row=1, col=1)
+
         if st.session_state.chart_settings['bbands'] and 'BB_Upper' in df.columns:
             fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='gray', width=1, dash='dot'), name='BB上軌'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='gray', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(200,200,200,0.1)', name='BB下軌'), row=1, col=1)
@@ -700,6 +837,7 @@ with st.sidebar:
         st.session_state.chart_settings['diamond'] = st.checkbox("鑽石型態", value=True)
         st.session_state.chart_settings['wedge'] = st.checkbox("楔形判斷", value=True)
         st.markdown("---")
+        st.session_state.chart_settings['structure'] = st.checkbox("🏛️ 結構通道 (新功能)", value=True) # UI added here
         st.session_state.chart_settings['bbands'] = st.checkbox("布林通道", value=True)
         st.session_state.chart_settings['macd'] = st.checkbox("MACD", value=True)
         st.session_state.chart_settings['kd'] = st.checkbox("KD 指標", value=True)
@@ -718,9 +856,9 @@ if app_mode == "🧬 量化回測系統":
         with col1:
             # [Security Note]: Defaults are hardcoded for user convenience in local dev.
             try:
-                default_finlab = st.secrets.get("FINLAB_API_TOKEN", "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m")
+                default_finlab = st.secrets.get("FINLAB_API_TOKEN", "")
             except:
-                default_finlab = "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m"
+                default_finlab = ""
 
             finlab_token = st.text_input("Finlab API Token", type="password", value=default_finlab, help="請輸入您的 Finlab API 金鑰")
         with col2:
@@ -791,7 +929,7 @@ if app_mode == "🧬 量化回測系統":
         avg_hold_win = trades[trades['return'] > 0]['period'].mean() if not trades.empty else 0
         avg_hold_loss = trades[trades['return'] <= 0]['period'].mean() if not trades.empty else 0
 
-        # Exposure Time (Proxy: days with position / total days)
+        # Exposure Time
         exposure = (equity != equity.shift(1)).mean() if equity is not None else 0
 
         # === Tab Layout ===
@@ -927,15 +1065,16 @@ if app_mode == "🧬 量化回測系統":
                     (trades_display['進場日期'].dt.date <= end_date)
                 ]
 
-            # CSV Download (Full Data)
-            # Use the filtered but UN-PAGINATED data for download
-            csv = trades_filtered.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 下載完整交易明細 (.csv)",
-                data=csv,
-                file_name=f'trade_log_{datetime.now().strftime("%Y%m%d")}.csv',
-                mime='text/csv',
-            )
+                # CSV Download (Full Data)
+                # Use the filtered but UN-PAGINATED data for download
+                # [FIX]: Indentation corrected to be inside `if not trades.empty:`
+                csv = trades_filtered.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 下載完整交易明細 (.csv)",
+                    data=csv,
+                    file_name=f'trade_log_{datetime.now().strftime("%Y%m%d")}.csv',
+                    mime='text/csv',
+                )
 
                 # === Pagination ===
                 items_per_page = 1000
@@ -954,7 +1093,7 @@ if app_mode == "🧬 量化回測系統":
 
                 trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
 
-                # CSV Download
+                # CSV Download (Page)
                 csv = trades_final.to_csv(index=False).encode('utf-8-sig')
                 st.download_button(
                     label="📥 下載交易明細 (.csv)",
@@ -993,9 +1132,9 @@ elif app_mode == "📂 自訂策略實驗室":
     with col1:
         # [Security Note]: Defaults are hardcoded for user convenience in local dev.
         try:
-            default_finlab = st.secrets.get("FINLAB_API_TOKEN", "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m")
+            default_finlab = st.secrets.get("FINLAB_API_TOKEN", "")
         except:
-            default_finlab = "KwXIZiqm9lapufiseA4EtS4vZ56M2Rw3u+J8Kxc2EEtugITVsD7cRRdfURb+3Aqj#vip_m"
+            default_finlab = ""
         finlab_token = st.text_input("Finlab API Token", type="password", value=default_finlab)
 
     with col2:
