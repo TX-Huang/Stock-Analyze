@@ -17,9 +17,13 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # Master Data - 定義宇宙與時間軸
     close = data.get('price:收盤價')
 
-    # [Fix for Pandas/Finlab Compatibility]:
-    # Force close.columns to be string type immediately.
-    # Some environments return CategoricalIndex which causes crashes during reindex/backtest.
+    # [Fix 2 for CategoricalDtype]: Capture original columns for final export
+    # We must return a DataFrame with the exact same column index type (Categorical)
+    # as the environment expects, otherwise backtest.sim crashes during alignment.
+    export_columns = close.columns
+
+    # [Fix 1 for Pandas/Finlab Compatibility]:
+    # Force internal close.columns to be string type immediately for safe calculations.
     close.columns = close.columns.astype(str)
 
     # 用於對齊的標準索引 (Master Index)
@@ -258,8 +262,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     score += v_inst_streak.astype(int)
 
     # 構建模擬用的 DataFrame
-    df_long = pd.DataFrame(np.nan, index=master_index, columns=master_columns)
-    df_short = pd.DataFrame(np.nan, index=master_index, columns=master_columns)
+    # [Fix 2]: Use export_columns (Categorical) so backtest.sim aligns correctly with internal data
+    df_long = pd.DataFrame(np.nan, index=master_index, columns=export_columns)
+    df_short = pd.DataFrame(np.nan, index=master_index, columns=export_columns)
 
     # 應用邏輯
     # 初始化為 NaN
