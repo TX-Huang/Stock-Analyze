@@ -12,25 +12,25 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     if take_profit is not None: take_profit = float(take_profit)
 
     # ==========================================
-    # 1. Fetch Data
+    # 1. 數據抓取 (Fetch Data)
     # ==========================================
-    # Master Data - Defines the Universe and Timeframe
+    # Master Data - 定義宇宙與時間軸
     close = data.get('price:收盤價')
 
-    # Master Index for alignment
+    # 用於對齊的標準索引 (Master Index)
     master_index = close.index
     master_columns = close.columns
 
-    # Helper to align everything to (Time x Stocks) or (Time x 1)
+    # 輔助函數：將所有資料對齊到 (時間 x 股票) 或 (時間 x 1)，並轉為 NumPy 陣列
     def to_numpy(obj, is_benchmark=False):
         if isinstance(obj, pd.Series):
-            # Align index only
+            # 僅對齊索引
             obj = obj.reindex(master_index, method='ffill')
             return obj.fillna(0).values.reshape(-1, 1)
         elif isinstance(obj, pd.DataFrame):
-            # Align index. We assume columns match 'close' for stock data.
-            # If not, we should reindex columns too, but data.get usually returns full universe.
-            # For safety, we can reindex columns too if it's stock data.
+            # 對齊索引。假設股票數據的欄位與 close 相同。
+            # 如果不是，應該重新對齊欄位，但 data.get 通常回傳完整宇宙。
+            # 為了安全，如果是股票數據，我們重新對齊欄位。
             if not is_benchmark:
                 obj = obj.reindex(index=master_index, columns=master_columns, method='ffill')
             else:
@@ -41,16 +41,16 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         else:
             return np.array(obj)
 
-    # Fetch other price data
+    # 抓取其他價格數據
     open_ = data.get('price:開盤價')
     high = data.get('price:最高價')
     low = data.get('price:最低價')
     vol = data.get('price:成交股數')
 
-    # Benchmark
+    # 大盤基準
     benchmark_close = data.get('price:收盤價')['0050']
 
-    # Fundamentals
+    # 基本面數據
     try:
         rev_growth = data.get('monthly_revenue:去年同月增減(%)')
         rev_current = data.get('monthly_revenue:當月營收')
@@ -81,14 +81,14 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         inst_net_buy = pd.DataFrame(0, index=master_index, columns=master_columns)
 
     # ==========================================
-    # 2. Pre-Calculation (Pandas)
+    # 2. 預計算 (Pandas 階段)
     # ==========================================
-    # We do rolling calculations in Pandas BEFORE converting to numpy
-    # This is easier than implementing rolling in numpy
+    # 在轉換為 NumPy 之前，先在 Pandas 中進行滾動計算
+    # 這比在 NumPy 中實現滾動更容易
 
-    # Moving Averages
+    # 移動平均線
     ma20 = close.rolling(20).mean()
-    ma50 = close.rolling(50).mean() # Not used?
+    ma50 = close.rolling(50).mean()
     ma60 = close.rolling(60).mean()
     ma120 = close.rolling(120).mean()
 
@@ -97,7 +97,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     bench_ma60 = benchmark_close.rolling(60).mean()
 
-    # RSI
+    # RSI 指標
     def rsi(series, period=14):
         delta = series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -107,28 +107,28 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     my_rsi = rsi(close, 14)
 
-    # Fundamental Helpers
+    # 基本面輔助指標
     rev_12m_max = rev_current.rolling(12).max()
     close_max_20 = close.rolling(20).max().shift(1)
     eps_sum = eps.rolling(4).sum()
 
-    # Institutional Helpers
+    # 籌碼面輔助指標
     inst_rolling_sum = inst_net_buy.rolling(3).sum()
     inst_streak = (inst_net_buy.rolling(5).min() > 0)
 
     # ==========================================
-    # 3. NumPy Conversion (The Nuclear Option)
+    # 3. NumPy 轉換 (核心加速與防禦)
     # ==========================================
-    print("[DEBUG] Converting to NumPy with defensive alignment...")
+    print("[DEBUG] 正在進行防禦性資料對齊並轉換為 NumPy...")
 
-    # Prices
+    # 價格數據
     v_close = to_numpy(close)
     v_open = to_numpy(open_)
-    v_high = to_numpy(high) # Not used?
+    v_high = to_numpy(high)
     v_low = to_numpy(low)
     v_vol = to_numpy(vol)
 
-    # Indicators
+    # 技術指標
     v_ma20 = to_numpy(ma20)
     v_ma60 = to_numpy(ma60)
     v_ma120 = to_numpy(ma120)
@@ -137,7 +137,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_rsi = to_numpy(my_rsi)
     v_close_max_20 = to_numpy(close_max_20)
 
-    # Fundamentals
+    # 基本面
     v_rev_growth = to_numpy(rev_growth)
     v_rev_current = to_numpy(rev_current)
     v_rev_12m_max = to_numpy(rev_12m_max)
@@ -148,54 +148,54 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_roe = to_numpy(roe)
     v_op_margin = to_numpy(op_margin)
 
-    # Inst
+    # 籌碼面
     v_inst_rolling = to_numpy(inst_rolling_sum)
     v_inst_streak = to_numpy(inst_streak)
 
-    # Market (1D -> Broadcast)
+    # 大盤 (1D -> 廣播)
     v_bench = to_numpy(benchmark_close, is_benchmark=True)
     v_bench_ma60 = to_numpy(bench_ma60, is_benchmark=True)
 
-    print(f"[DEBUG] Close Shape: {v_close.shape}")
-    print(f"[DEBUG] Bench Shape: {v_bench.shape}")
+    print(f"[DEBUG] 收盤價陣列形狀: {v_close.shape}")
+    print(f"[DEBUG] 大盤陣列形狀: {v_bench.shape}")
 
     # ==========================================
-    # 4. Logic Execution (Pure Math)
+    # 4. 策略邏輯執行 (純數學運算)
     # ==========================================
 
-    # Data Integrity Checks (Prevent trading on zero-filled missing data)
-    # MA > 0 check ensures we have valid moving averages (not early days or missing data)
+    # 資料完整性檢查 (防止在缺失數據填充為0時進行交易)
+    # MA > 0 檢查確保我們有有效的移動平均線 (不是上市初期或缺失數據)
     has_ma20 = v_ma20 > 0
     has_ma60 = v_ma60 > 0
     has_ma120 = v_ma120 > 0
 
-    # Market Masks
-    # v_bench and v_bench_ma60 are (T, 1)
-    # If benchmark MA is 0, v_bullish will be True (0 > 0 * 1.01 is False, wait)
-    # v_bench > 0 check
+    # 市場狀態濾網
+    # v_bench 和 v_bench_ma60 形狀為 (T, 1)
+    # 如果大盤 MA 為 0，v_bullish 會是 False (因為 0 > 0 * 1.01 是 False，安全)
+    # 加入 v_bench_ma60 > 0 更保險
     v_bullish = (v_bench > v_bench_ma60 * 1.01) & (v_bench_ma60 > 0)
     v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0)
 
-    # Liquidity Filter
+    # 流動性濾網
     v_liq = (v_vol_ma20 > 1000000)
 
-    # --- Signal A: Growth ---
-    # Fix: Capital < 2M check also needs Capital > 0 to avoid missing data being flagged as small cap
+    # --- 訊號 A: 小型成長股 (Growth) ---
+    # 修正：Capital < 2M 檢查也需要 Capital > 0，避免缺失數據被誤判為小型股
     c_small = (v_capital < 2000000) & (v_capital > 0)
 
     c_rev = (v_rev_growth > 30) | (v_rev_current >= v_rev_12m_max)
     c_profit = (v_eps_sum > 0) & (v_op_income > 0)
     c_value = (v_pe < 30) & (v_pe > 0)
 
-    # Fix: Check MAs > 0
+    # 趨勢與均線檢查 (需 > 0)
     c_trend = (v_close > v_ma20) & (v_close > v_ma60) & has_ma20 & has_ma60
 
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
     sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq
-    print(f"[DEBUG] Signal A Triggers: {np.sum(sig_a)}")
+    print(f"[DEBUG] 訊號 A 觸發次數: {np.sum(sig_a)}")
 
-    # --- Signal B: Reversion ---
+    # --- 訊號 B: 均值回歸 (Reversion) ---
     c_oversold = (v_close < v_ma120) & has_ma120
     c_rsi_panic = v_rsi < 20
     c_vol_panic = v_vol > v_vol_ma20 * 2
@@ -205,9 +205,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_hammer = lower_shadow > (body * 2)
 
     sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq
-    print(f"[DEBUG] Signal B Triggers: {np.sum(sig_b)}")
+    print(f"[DEBUG] 訊號 B 觸發次數: {np.sum(sig_b)}")
 
-    # --- Signal C: Short ---
+    # --- 訊號 C: 放空 (Short) ---
     c_weak = (v_close < v_ma60) & (v_close < v_ma20) & has_ma20 & has_ma60
     bias = (v_close - v_ma20) / (v_ma20 + 1e-9)
     c_bias = bias > -0.10
@@ -221,106 +221,67 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_black = v_close < v_open
 
     sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black & v_liq
-    print(f"[DEBUG] Signal C Triggers: {np.sum(sig_c)}")
+    print(f"[DEBUG] 訊號 C 觸發次數: {np.sum(sig_c)}")
 
     # ==========================================
-    # 5. Position Reconstruction
+    # 5. 部位重建 (Position Reconstruction)
     # ==========================================
 
     long_entries = sig_a | sig_b
     short_entries = sig_c
 
-    # Exit Conditions
+    # 出場條件
     c_reversion_hold = (v_close < v_ma60) & (v_rsi < 50)
 
     long_exits = ((v_close < v_ma20) & (~c_reversion_hold)) | v_bearish
     short_exits = (v_close > v_ma20) | v_bullish | (v_rsi < 20)
 
-    # Score
+    # 評分權重
     score = np.ones_like(v_close)
     score += (v_rev_growth > 50).astype(int)
     score += ((v_roe > 20) | (v_op_margin > 20)).astype(int)
     score += v_inst_streak.astype(int)
 
-    # Construct DF for Simulation
+    # 構建模擬用的 DataFrame
     df_long = pd.DataFrame(np.nan, index=master_index, columns=master_columns)
     df_short = pd.DataFrame(np.nan, index=master_index, columns=master_columns)
 
-    # Apply logic
-    # Note: numpy boolean arrays can be used to index DF if shapes match
-    # But safer to just use values assignment
-
-    # Initialize with NaNs
+    # 應用邏輯
+    # 初始化為 NaN
     v_pos_long = np.full_like(v_close, np.nan)
     v_pos_short = np.full_like(v_close, np.nan)
 
-    # Entry
+    # 進場
     v_pos_long[long_entries] = score[long_entries]
     v_pos_short[short_entries] = -0.5
 
-    # Exit (Overwrite entry if exit coincides? Usually exit happens after entry.
-    # But here we are defining signals.
-    # Finlab backtest.sim takes a signal DF and holds until signal changes or becomes 0/NaN?
-    # Actually Finlab backtest takes "Position Size" or "Signal".
-    # If we return a signal that is NaN, it holds previous position?
-    # No, typically 0 means exit, NaN means hold? Or NaN means no signal?
-    # finlab.backtest.sim documentation says:
-    # "entries are positive, exits are 0. NaN means hold."
-
-    # So:
-    # Entry: Set to Score (Weight)
-    # Exit: Set to 0
-    # Hold: Set to NaN
-
-    # We must ensure Exit overrides Entry if both happen same day?
-    # If I enter and exit same day, I probably shouldn't enter.
-    # So Exits take precedence?
-    # Or, Entry happens at Close, Exit happens at Close?
-    # If Signal A triggers (Entry), and Exit condition triggers (Close < MA20).
-    # Signal A requires Close > MA20. So Long Entry & Long Exit are mutually exclusive mostly.
-    # Except v_bearish trigger.
-    # If v_bearish is True, Signal A (v_bullish) is False.
-    # So Signal A and Market Exit are mutually exclusive.
-
-    # What about Signal B?
-    # Signal B is Reversion (Close < MA120).
-    # Exit is Close < MA20. (True)
-    # But we added "Unless Reversion Hold".
-    # If Signal B triggers, we are in Reversion Hold?
-    # Signal B: v_rsi < 20.
-    # Reversion Hold: v_rsi < 50.
-    # So Signal B implies Reversion Hold.
-    # So Exit is False.
-    # So Entry passes.
-
-    # So we are good.
-
+    # 出場 (設置為 0)
     v_pos_long[long_exits] = 0
     v_pos_short[short_exits] = 0
 
-    # Assign to DF
+    # 寫回 DataFrame
     df_long[:] = v_pos_long
     df_short[:] = v_pos_short
 
-    # Ffill to simulate holding
-    # "NaN means hold previous state"
+    # 向前填充 (ffill) 以模擬持倉
+    # "NaN 表示保持之前的狀態 (Hold)"
     df_long = df_long.ffill().fillna(0)
     df_short = df_short.ffill().fillna(0)
 
     final_pos = df_long + df_short
 
-    # Run Backtest
-    print("[DEBUG] Running Simulation...")
+    # 執行回測
+    print("[DEBUG] 正在執行回測模擬...")
     if stop_loss is not None or take_profit is not None:
         report = backtest.sim(
             final_pos,
             resample='D',
-            name='Isaac Strategy (Stress Test)',
+            name='Isaac 策略 (壓力測試)',
             upload=False,
             stop_loss=stop_loss,
             take_profit=take_profit
         )
     else:
-        report = backtest.sim(final_pos, resample='D', name='Isaac Strategy (All-Weather)', upload=False)
+        report = backtest.sim(final_pos, resample='D', name='Isaac 策略 (全天候)', upload=False)
 
     return report
