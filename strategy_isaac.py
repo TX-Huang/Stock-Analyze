@@ -119,7 +119,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # ==========================================
     # 3. NumPy 轉換 (核心加速與防禦)
     # ==========================================
-    print("[DEBUG] 正在進行防禦性資料對齊並轉換為 NumPy...")
 
     # 價格數據
     v_close = to_numpy(close)
@@ -156,9 +155,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_bench = to_numpy(benchmark_close, is_benchmark=True)
     v_bench_ma60 = to_numpy(bench_ma60, is_benchmark=True)
 
-    print(f"[DEBUG] 收盤價陣列形狀: {v_close.shape}")
-    print(f"[DEBUG] 大盤陣列形狀: {v_bench.shape}")
-
     # ==========================================
     # 4. 策略邏輯執行 (純數學運算)
     # ==========================================
@@ -193,7 +189,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
     sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq
-    print(f"[DEBUG] 訊號 A 觸發次數: {np.sum(sig_a)}")
 
     # --- 訊號 B: 均值回歸 (Reversion) ---
     c_oversold = (v_close < v_ma120) & has_ma120
@@ -205,7 +200,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_hammer = lower_shadow > (body * 2)
 
     sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq
-    print(f"[DEBUG] 訊號 B 觸發次數: {np.sum(sig_b)}")
 
     # --- 訊號 C: 放空 (Short) ---
     c_weak = (v_close < v_ma60) & (v_close < v_ma20) & has_ma20 & has_ma60
@@ -221,7 +215,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_black = v_close < v_open
 
     sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black & v_liq
-    print(f"[DEBUG] 訊號 C 觸發次數: {np.sum(sig_c)}")
 
     # ==========================================
     # 5. 部位重建 (Position Reconstruction)
@@ -271,7 +264,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     final_pos = df_long + df_short
 
     # 執行回測
-    print("[DEBUG] 正在執行回測模擬...")
     if stop_loss is not None or take_profit is not None:
         report = backtest.sim(
             final_pos,

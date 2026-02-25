@@ -337,6 +337,9 @@ def render_backtest_dashboard(report):
             if 'entry_date' in trades_display.columns:
                 trades_display['entry_date'] = pd.to_datetime(trades_display['entry_date'])
 
+            # Use all trades as filtered trades since no filter is applied here yet
+            trades_filtered = trades_display
+
             # CSV Download
             # Use the filtered but UN-PAGINATED data for download
             # [FIX]: Indentation corrected to be inside `if not trades.empty:`
@@ -617,7 +620,6 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
     for suffix in suffixes:
         try_t = f"{ticker}{suffix}" if str(ticker).endswith(suffix) == False and suffix != "" else ticker
         try:
-            print(f"嘗試抓取: {try_t}")
             d = yf.download(try_t, period=period, interval=interval, progress=False, auto_adjust=False)
 
             if not d.empty:
@@ -626,8 +628,8 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
 
                 if 'Close' in d.columns and len(d) > 30:
                     stock = yf.Ticker(try_t)
-                    df = d; final_full_t = try_t; print("成功!"); break
-        except Exception as e: print(f"錯誤: {e}"); continue
+                    df = d; final_full_t = try_t; break
+        except Exception: continue
 
     if df.empty: return None
     try:
@@ -676,8 +678,7 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
             "df": df, "verdict": verdict, "extra_info": extra + " " + tech_summary,
             "patterns": patterns, "signal_context": signal_str
         }
-    except Exception as e:
-        print(f"數據處理錯誤: {e}")
+    except Exception:
         return None
 
 def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
@@ -699,7 +700,8 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
 
     progress = st.progress(0); st_text = st.empty()
     for i, t in enumerate(unique_tickers):
-        st_text.text(f"掃描中: {t}..."); progress.progress((i+1)/len(unique_tickers))
+        st_text.text(f"掃描中: {t}...");
+        if (i+1) <= len(unique_tickers): progress.progress((i+1)/len(unique_tickers))
         stock = None; df = pd.DataFrame(); final_t = t
         for suf in suffixes:
             try_t = f"{t}{suf}" if str(t).endswith(suf) == False and suf != "" else t
@@ -1138,11 +1140,12 @@ if app_mode == "🧬 量化回測系統":
                                     'CAGR': stats_grid.get('cagr', 0),
                                     'Sharpe': stats_grid.get('sharpe', 0)
                                 })
-                            except Exception as e:
-                                print(e)
+                            except Exception:
+                                pass
 
                             step_count += 1
-                            progress_bar.progress(step_count / total_steps)
+                            if step_count <= total_steps:
+                                progress_bar.progress(step_count / total_steps)
 
                     df_grid = pd.DataFrame(results)
                     if not df_grid.empty:
