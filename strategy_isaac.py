@@ -19,7 +19,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     # 用於對齊的標準索引 (Master Index)
     master_index = close.index
-    master_columns = close.columns
+    # [Fix for Pandas Compatibility]: Ensure columns are strings, not CategoricalIndex
+    # This prevents TypeError: (CategoricalDtype...) during reindex on some Pandas versions
+    master_columns = close.columns.astype(str)
 
     # 輔助函數：將所有資料對齊到 (時間 x 股票) 或 (時間 x 1)，並轉為 NumPy 陣列
     def to_numpy(obj, is_benchmark=False):
