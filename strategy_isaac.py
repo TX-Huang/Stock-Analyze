@@ -17,18 +17,13 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # Master Data - 定義宇宙與時間軸
     close = data.get('price:收盤價')
 
-    # [Fix 2 for CategoricalDtype]: Capture original columns for final export
-    # We must return a DataFrame with the exact same column index type (Categorical)
-    # as the environment expects, otherwise backtest.sim crashes during alignment.
-    export_columns = close.columns
-
-    # [Fix 1 for Pandas/Finlab Compatibility]:
-    # Force internal close.columns to be string type immediately for safe calculations.
-    close.columns = close.columns.astype(str)
-
-    # 用於對齊的標準索引 (Master Index)
+    # [Fix 3: Immutability]
+    # Do NOT modify close.columns in place, as it might corrupt Finlab's global cache.
+    # Instead, define a separate string index for internal alignment.
     master_index = close.index
-    master_columns = close.columns # Now guaranteed to be Index(dtype='object')
+    master_columns_str = close.columns.astype(str) # For internal Safe Alignment
+
+    # We will use this to reindex inputs.
 
     # 輔助函數：將所有資料對齊到 (時間 x 股票) 或 (時間 x 1)，並轉為 NumPy 陣列
     def to_numpy(obj, is_benchmark=False):
@@ -37,16 +32,22 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
             obj = obj.reindex(master_index, method='ffill')
             return obj.fillna(0).values.reshape(-1, 1)
         elif isinstance(obj, pd.DataFrame):
-            # Aggressively sanitize columns to match master_columns type (str)
-            if not is_benchmark:
-                # If columns are Categorical or different type, cast to str
-                if not obj.columns.equals(master_columns):
-                    obj.columns = obj.columns.astype(str)
+            # [Fix 3]: Work on a copy to avoid side effects
+            # If the input dataframe (e.g. from data.get) has Categorical columns,
+            # we must convert them to string to match `master_columns_str` for reindexing.
 
-                obj = obj.reindex(index=master_index, columns=master_columns, method='ffill')
+            # Check if we need to align columns
+            if not is_benchmark:
+                # We use a copy-based approach for safety
+                df_temp = obj.copy()
+                df_temp.columns = df_temp.columns.astype(str)
+
+                # Now reindex using the Safe String Index
+                df_aligned = df_temp.reindex(index=master_index, columns=master_columns_str, method='ffill')
+                return df_aligned.fillna(0).values
             else:
                 obj = obj.reindex(index=master_index, method='ffill')
-            return obj.fillna(0).values
+                return obj.fillna(0).values
         elif isinstance(obj, np.ndarray):
             return obj
         else:
@@ -67,9 +68,9 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         rev_current = data.get('monthly_revenue:當月營收')
         capital = data.get('finance_statement:股本')
     except:
-        rev_growth = pd.DataFrame(0, index=master_index, columns=master_columns)
-        rev_current = pd.DataFrame(0, index=master_index, columns=master_columns)
-        capital = pd.DataFrame(10000000, index=master_index, columns=master_columns)
+        rev_growth = pd.DataFrame(0, index=master_index, columns=close.columns)
+        rev_current = pd.DataFrame(0, index=master_index, columns=close.columns)
+        capital = pd.DataFrame(10000000, index=master_index, columns=close.columns)
 
     try:
         eps = data.get('finance_statement:每股盈餘')
@@ -78,24 +79,22 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         op_margin = data.get('finance_statement:營業利益率')
         pe = data.get('price:本益比')
     except:
-        eps = pd.DataFrame(0, index=master_index, columns=master_columns)
-        op_income = pd.DataFrame(0, index=master_index, columns=master_columns)
-        roe = pd.DataFrame(0, index=master_index, columns=master_columns)
-        op_margin = pd.DataFrame(0, index=master_index, columns=master_columns)
-        pe = pd.DataFrame(100, index=master_index, columns=master_columns)
+        eps = pd.DataFrame(0, index=master_index, columns=close.columns)
+        op_income = pd.DataFrame(0, index=master_index, columns=close.columns)
+        roe = pd.DataFrame(0, index=master_index, columns=close.columns)
+        op_margin = pd.DataFrame(0, index=master_index, columns=close.columns)
+        pe = pd.DataFrame(100, index=master_index, columns=close.columns)
 
     try:
         foreign_buy = data.get('institutional_investors:外資買賣超股數').fillna(0)
         trust_buy = data.get('institutional_investors:投信買賣超股數').fillna(0)
         inst_net_buy = foreign_buy + trust_buy
     except:
-        inst_net_buy = pd.DataFrame(0, index=master_index, columns=master_columns)
+        inst_net_buy = pd.DataFrame(0, index=master_index, columns=close.columns)
 
     # ==========================================
     # 2. 預計算 (Pandas 階段)
     # ==========================================
-    # 在轉換為 NumPy 之前，先在 Pandas 中進行滾動計算
-    # 這比在 NumPy 中實現滾動更容易
 
     # 移動平均線
     ma20 = close.rolling(20).mean()
@@ -170,14 +169,11 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 4. 策略邏輯執行 (純數學運算)
     # ==========================================
 
-    # 資料完整性檢查 (防止在缺失數據填充為0時進行交易)
-    # MA > 0 檢查確保我們有有效的移動平均線 (不是上市初期或缺失數據)
     has_ma20 = v_ma20 > 0
     has_ma60 = v_ma60 > 0
     has_ma120 = v_ma120 > 0
 
     # 市場狀態濾網
-    # [Fix 1]: Ensure v_bench > 0 to prevent false exits on missing data
     v_bullish = (v_bench > v_bench_ma60 * 1.01) & (v_bench_ma60 > 0)
     v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0) & (v_bench > 0)
 
@@ -185,16 +181,13 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_liq = (v_vol_ma20 > 1000000)
 
     # --- 訊號 A: 小型成長股 (Growth) ---
-    # 修正：Capital < 2M 檢查也需要 Capital > 0，避免缺失數據被誤判為小型股
     c_small = (v_capital < 2000000) & (v_capital > 0)
 
     c_rev = (v_rev_growth > 30) | (v_rev_current >= v_rev_12m_max)
     c_profit = (v_eps_sum > 0) & (v_op_income > 0)
     c_value = (v_pe < 30) & (v_pe > 0)
 
-    # 趨勢與均線檢查 (需 > 0)
     c_trend = (v_close > v_ma20) & (v_close > v_ma60) & has_ma20 & has_ma60
-
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
     sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq
@@ -210,23 +203,8 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq
 
-    # --- 訊號 C: 放空 (Short) - DISABLED BY DEFAULT ---
-    # [Fix 3]: Temporarily disable shorting to prevent extreme losses (-99% MDD)
-    # The logic is commented out by setting sig_c to False
-    c_weak = (v_close < v_ma60) & (v_close < v_ma20) & has_ma20 & has_ma60
-    bias = (v_close - v_ma20) / (v_ma20 + 1e-9)
-    c_bias = bias > -0.10
-
-    c_bad_rev = v_rev_growth < 0
-    c_bad_profit = (v_eps_sum < 0) | (v_op_income < 0)
-    c_bubble = v_pe > 60
-
-    c_inst_sell = v_inst_rolling < 0
-    c_bad_fund = c_bad_rev | c_bad_profit | c_bubble
-    c_black = v_close < v_open
-
-    # sig_c = v_bearish & c_weak & c_bias & (c_bad_fund | c_inst_sell) & c_black & v_liq
-    sig_c = np.zeros_like(v_close, dtype=bool) # Disable shorting
+    # --- 訊號 C: 放空 (Short) - DISABLED ---
+    sig_c = np.zeros_like(v_close, dtype=bool)
 
     # ==========================================
     # 5. 部位重建 (Position Reconstruction)
@@ -235,56 +213,36 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     long_entries = sig_a | sig_b
     short_entries = sig_c
 
-    # 出場條件
-    # [Fix 2]: Reversion Hold Logic - Allow bounce until RSI > 50 or Stop Loss hit
-    # Hold if: (Price < MA60) AND (RSI < 50)
     c_reversion_hold = (v_close < v_ma60) & (v_rsi < 50)
 
-    # [Fix 4]: Relaxed Trend Exit - Change from MA20 to MA60 to reduce churn
-    # Trend Exit: Close < MA60 (Trend Change)
-    # Reversion Exit: If NOT holding, exit.
-
-    # Logic:
-    # If it was a Trend Trade (Sig A): Exit if Close < MA60 OR Market Bearish
-    # If it was a Reversion Trade (Sig B): Exit if RSI > 50 (Take Profit) OR Close < MA60 (Trend continuation down)
-
-    # Simplified Exit: Close < MA60 is the main trend filter.
-    # Bearish market forces exit.
-
-    # [Fix 2 applied]: Don't exit if holding due to reversion logic
     long_exits = ((v_close < v_ma60) & (~c_reversion_hold)) | v_bearish
     short_exits = (v_close > v_ma20) | v_bullish | (v_rsi < 20)
 
-    # 評分權重
     score = np.ones_like(v_close)
     score += (v_rev_growth > 50).astype(int)
     score += ((v_roe > 20) | (v_op_margin > 20)).astype(int)
     score += v_inst_streak.astype(int)
 
     # 構建模擬用的 DataFrame
-    # [Fix 2]: Use export_columns (Categorical) so backtest.sim aligns correctly with internal data
-    df_long = pd.DataFrame(np.nan, index=master_index, columns=export_columns)
-    df_short = pd.DataFrame(np.nan, index=master_index, columns=export_columns)
+    # [Fix 3]: Use the ORIGINAL columns (close.columns) for the return DataFrame.
+    # We DO NOT cast this to string, so backtest.sim receives exactly what it gave us.
+    # Since all our math was done on numpy arrays (order preserved), this lines up perfectly.
+    df_long = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
+    df_short = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
 
     # 應用邏輯
-    # 初始化為 NaN
     v_pos_long = np.full_like(v_close, np.nan)
     v_pos_short = np.full_like(v_close, np.nan)
 
-    # 進場
     v_pos_long[long_entries] = score[long_entries]
     v_pos_short[short_entries] = -0.5
 
-    # 出場 (設置為 0)
     v_pos_long[long_exits] = 0
     v_pos_short[short_exits] = 0
 
-    # 寫回 DataFrame
     df_long[:] = v_pos_long
     df_short[:] = v_pos_short
 
-    # 向前填充 (ffill) 以模擬持倉
-    # "NaN 表示保持之前的狀態 (Hold)"
     df_long = df_long.ffill().fillna(0)
     df_short = df_short.ffill().fillna(0)
 
