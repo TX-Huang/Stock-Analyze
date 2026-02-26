@@ -146,6 +146,11 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_rsi = to_numpy(my_rsi)
     v_close_max_20 = to_numpy(close_max_20)
 
+    # 計算歷史重要高點 (Supply Zone Proxy)
+    # 使用 Rolling Max 250 天 (約一年)
+    high_250 = close.rolling(250).max().shift(1)
+    v_high_250 = to_numpy(high_250)
+
     # 基本面
     v_rev_growth = to_numpy(rev_growth)
     v_rev_current = to_numpy(rev_current)
@@ -180,6 +185,14 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 流動性濾網
     v_liq = (v_vol_ma20 > 1000000)
 
+    # [New] Supply Zone Filter (套牢區濾網)
+    # 當股價距離重大歷史高點 (250日高) 不到 5% (但在其下方)，視為進入套牢賣壓區，暫停買進。
+    # Logic: 0.95 * High250 <= Close < High250
+    # 注意：如果 Close >= High250，代表已經突破，則不擋。
+    # v_high_250 可能有 NaN (前250天)，需處理 > 0
+    c_supply_danger = (v_close >= v_high_250 * 0.95) & (v_close < v_high_250) & (v_high_250 > 0)
+    c_safe_supply = ~c_supply_danger
+
     # --- 訊號 A: 小型成長股 (Growth) ---
     c_small = (v_capital < 2000000) & (v_capital > 0)
 
@@ -190,7 +203,8 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     c_trend = (v_close > v_ma20) & (v_close > v_ma60) & has_ma20 & has_ma60
     c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
 
-    sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq
+    # 加入 Supply Zone Filter
+    sig_a = v_bullish & c_small & c_rev & c_profit & c_value & c_trend & c_breakout & v_liq & c_safe_supply
 
     # --- 訊號 B: 均值回歸 (Reversion) ---
     c_oversold = (v_close < v_ma120) & has_ma120
@@ -201,7 +215,8 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     lower_shadow = np.minimum(v_close, v_open) - v_low
     c_hammer = lower_shadow > (body * 2)
 
-    sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq
+    # 加入 Supply Zone Filter (即使是抄底，如果在壓力區正下方也不買)
+    sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & c_vol_panic & v_liq & c_safe_supply
 
     # --- 訊號 C: 放空 (Short) - DISABLED ---
     sig_c = np.zeros_like(v_close, dtype=bool)
