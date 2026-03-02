@@ -5,14 +5,16 @@ import numpy as np
 import finlab
 
 def run_vcp_strategy(api_token):
+    from data_provider import sanitize_dataframe
+
     if api_token:
         finlab.login(api_token)
 
     # 1. Fetch Data
-    close = data.get('price:收盤價')
-    high = data.get('price:最高價')
-    low = data.get('price:最低價')
-    vol = data.get('price:成交股數')
+    close = sanitize_dataframe(data.get('price:收盤價'), "FinLab_Close")
+    high = sanitize_dataframe(data.get('price:最高價'), "FinLab_High")
+    low = sanitize_dataframe(data.get('price:最低價'), "FinLab_Low")
+    vol = sanitize_dataframe(data.get('price:成交股數'), "FinLab_Vol")
 
     try:
         benchmark = data.get('price:收盤價')['0050']
@@ -117,5 +119,16 @@ def run_vcp_strategy(api_token):
     position[exit_signal] = 0
     position = position.ffill().fillna(0)
 
-    report = backtest.sim(position, resample='D', name='VCP Strategy (Minervini)', upload=False)
-    return report
+    import logging
+    import os
+    logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
+    try:
+        if isinstance(position.columns, pd.CategoricalIndex):
+            logging.info("偵測到 CategoricalIndex，強制轉換為 string Index")
+            position.columns = position.columns.astype(str)
+
+        report = backtest.sim(position, resample='D', name='VCP 波動收縮策略', upload=False)
+        return report
+    except Exception as e:
+        logging.error(f"backtest.sim 崩潰: {str(e)}", exc_info=True)
+        raise e
