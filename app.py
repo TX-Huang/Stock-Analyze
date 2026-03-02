@@ -748,11 +748,11 @@ def calculate_trend_logic(df, n=10, is_weekly=False):
             m_trough = (t_last - t_prev) / (x_t2 - x_t1)
 
             if p_last > p_prev and t_last > t_prev:
-                if m_trough > m_peak * 1.2: verdict["trend"] = "⚠️ 上升楔形"; verdict["color"] = "red"
-                else: verdict["trend"] = "🟢 多頭趨勢"; verdict["color"] = "green"
+                if m_trough > m_peak * 1.2: verdict["trend"] = "⚠️ 上升楔形"; verdict["color"] = "green"
+                else: verdict["trend"] = "🔴 多頭趨勢"; verdict["color"] = "red"
             elif p_last < p_prev and t_last < t_prev:
-                if m_peak < m_trough * 1.2: verdict["trend"] = "✨ 下降楔形"; verdict["color"] = "green"
-                else: verdict["trend"] = "🔴 空頭趨勢"; verdict["color"] = "red"
+                if m_peak < m_trough * 1.2: verdict["trend"] = "✨ 下降楔形"; verdict["color"] = "red"
+                else: verdict["trend"] = "🟢 空頭趨勢"; verdict["color"] = "green"
             elif p_last < p_prev and t_last > t_prev: verdict["trend"] = "📐 收斂整理"; verdict["color"] = "orange"
             elif p_last > p_prev and t_last < t_prev: verdict["trend"] = "🎺 擴散型態"; verdict["color"] = "orange"
 
@@ -922,6 +922,7 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
 
         fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2], subplot_titles=("價格與壓力/支撐", "成交量"))
 
+        # Taiwan standard: Red for Up (increasing), Green for Down (decreasing)
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#ef4444', decreasing_line_color='#22c55e'), row=1, col=1)
 
         if st.session_state.chart_settings.get('ma', True):
@@ -963,7 +964,7 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
 
             if len(peaks) >= 2:
                 p1_idx, p2_idx = peaks.index[-2], peaks.index[-1]; p1_val, p2_val = peaks.iloc[-2], peaks.iloc[-1]
-                fig.add_trace(go.Scatter(x=[p1_idx, p2_idx], y=[p1_val, p2_val], mode='lines', line=dict(color="Red", width=1.5, dash="dash"), name='壓力線'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=[p1_idx, p2_idx], y=[p1_val, p2_val], mode='lines', line=dict(color="Green", width=1.5, dash="dash"), name='壓力線'), row=1, col=1)
                 # Extension to current date
                 x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
                 if x2 != x1:
@@ -972,11 +973,11 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                     end_idx_for_line = max(int(zone_data['x_int']) + 2 if zone_data else len(df)-1, len(df)-1)
                     end_date = get_date_from_index(end_idx_for_line, df, is_weekly)
                     proj = p2_val + slope * (end_idx_for_line - x2)
-                    fig.add_trace(go.Scatter(x=[p2_idx, end_date], y=[p2_val, proj], mode='lines', line=dict(color="Red", width=1, dash="dot"), name='壓力線延伸'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=[p2_idx, end_date], y=[p2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='壓力線延伸'), row=1, col=1)
 
             if len(troughs) >= 2:
                 t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]; t1_val, t2_val = troughs.iloc[-2], troughs.iloc[-1]
-                fig.add_trace(go.Scatter(x=[t1_idx, t2_idx], y=[t1_val, t2_val], mode='lines', line=dict(color="Green", width=1.5, dash="dash"), name='支撐線'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=[t1_idx, t2_idx], y=[t1_val, t2_val], mode='lines', line=dict(color="Red", width=1.5, dash="dash"), name='支撐線'), row=1, col=1)
                 # Extension to current date
                 x1, x2 = df.index.get_loc(t1_idx), df.index.get_loc(t2_idx)
                 if x2 != x1:
@@ -984,7 +985,7 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                     end_idx_for_line = max(int(zone_data['x_int']) + 2 if zone_data else len(df)-1, len(df)-1)
                     end_date = get_date_from_index(end_idx_for_line, df, is_weekly)
                     proj = t2_val + slope * (end_idx_for_line - x2)
-                    fig.add_trace(go.Scatter(x=[t2_idx, end_date], y=[t2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='支撐線延伸'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=[t2_idx, end_date], y=[t2_val, proj], mode='lines', line=dict(color="Red", width=1, dash="dot"), name='支撐線延伸'), row=1, col=1)
 
         # [New] Implement Gap Visualization (跳空)
         if st.session_state.chart_settings.get('gaps', True):
@@ -1000,30 +1001,31 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                 curr_high = df['High'].iloc[i]
                 prev_low = df['Prev_Low'].iloc[i]
 
-                # Draw Up Gap
+                # Draw Up Gap (Red for Bullish in TW)
                 if curr_low > prev_high * 1.005:
                     fig.add_shape(type="rect", x0=df.index[i-1], x1=df.index[i], y0=prev_high, y1=curr_low,
-                                  line=dict(width=0), fillcolor="rgba(34, 197, 94, 0.3)", row=1, col=1)
+                                  line=dict(width=0), fillcolor="rgba(239, 68, 68, 0.3)", row=1, col=1)
                     # Extend Support Line
-                    fig.add_trace(go.Scatter(x=[df.index[i], df.index[-1]], y=[prev_high, prev_high], mode='lines', line=dict(color="rgba(34, 197, 94, 0.5)", width=1, dash="dot"), showlegend=False), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=[df.index[i], df.index[-1]], y=[prev_high, prev_high], mode='lines', line=dict(color="rgba(239, 68, 68, 0.5)", width=1, dash="dot"), showlegend=False), row=1, col=1)
 
-                # Draw Down Gap
+                # Draw Down Gap (Green for Bearish in TW)
                 if curr_high < prev_low * 0.995:
                     fig.add_shape(type="rect", x0=df.index[i-1], x1=df.index[i], y0=curr_high, y1=prev_low,
-                                  line=dict(width=0), fillcolor="rgba(239, 68, 68, 0.3)", row=1, col=1)
+                                  line=dict(width=0), fillcolor="rgba(34, 197, 94, 0.3)", row=1, col=1)
                     # Extend Resistance Line
-                    fig.add_trace(go.Scatter(x=[df.index[i], df.index[-1]], y=[prev_low, prev_low], mode='lines', line=dict(color="rgba(239, 68, 68, 0.5)", width=1, dash="dot"), showlegend=False), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=[df.index[i], df.index[-1]], y=[prev_low, prev_low], mode='lines', line=dict(color="rgba(34, 197, 94, 0.5)", width=1, dash="dot"), showlegend=False), row=1, col=1)
 
         # Candle Patterns Annotations
         if st.session_state.chart_settings.get('candle_patterns', True) and candle_patterns:
             for p in candle_patterns:
                 date = p['date']
                 y_val = df.loc[date, 'High'] * 1.02 if p['type'] == 'Bearish' else df.loc[date, 'Low'] * 0.98
+                # Font color matches TW standard (Red for Bullish, Green for Bearish)
                 fig.add_annotation(
                     x=date, y=y_val,
                     text=p['name'],
                     showarrow=False,
-                    font=dict(color="red" if p['type'] == 'Bearish' else "green", size=10),
+                    font=dict(color="green" if p['type'] == 'Bearish' else "red", size=10),
                     row=1, col=1
                 )
 
