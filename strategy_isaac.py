@@ -5,6 +5,8 @@ import numpy as np
 import finlab
 
 def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
+    from data_provider import sanitize_dataframe
+
     if api_token:
         finlab.login(api_token)
 
@@ -15,7 +17,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 1. 數據抓取 (Fetch Data)
     # ==========================================
     # Master Data - 定義宇宙與時間軸
-    close = data.get('price:收盤價')
+    close = sanitize_dataframe(data.get('price:收盤價'), "FinLab_Close")
 
     # [Fix 3: Immutability]
     # Do NOT modify close.columns in place, as it might corrupt Finlab's global cache.
@@ -26,16 +28,18 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # We will use this to reindex inputs.
 
     # 輔助函數：將所有資料對齊到 (時間 x 股票) 或 (時間 x 1)，並轉為 NumPy 陣列
-    def to_numpy(obj, is_benchmark=False):
+    def to_numpy(obj, obj_name="Unknown", is_benchmark=False):
+        if obj is None: return np.nan
+
+        # 套用源頭防呆淨化 (Sanitization)
+        if isinstance(obj, pd.DataFrame):
+            obj = sanitize_dataframe(obj, source_name=obj_name)
+
         if isinstance(obj, pd.Series):
             # 僅對齊索引
             obj = obj.reindex(master_index, method='ffill')
             return obj.fillna(0).values.reshape(-1, 1)
         elif isinstance(obj, pd.DataFrame):
-            # [Fix 3]: Work on a copy to avoid side effects
-            # If the input dataframe (e.g. from data.get) has Categorical columns,
-            # we must convert them to string to match `master_columns_str` for reindexing.
-
             # Check if we need to align columns
             if not is_benchmark:
                 # We use a copy-based approach for safety

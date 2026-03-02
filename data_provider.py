@@ -5,6 +5,34 @@ import datetime
 import re
 import streamlit as st
 
+def sanitize_dataframe(df: pd.DataFrame, source_name: str = "Unknown") -> pd.DataFrame:
+    """
+    強制淨化 DataFrame：源頭防呆機制
+    針對 FinLab 和其他 API 來源，強制將欄位型態和 Index 統一，
+    避免 Pandas 1.5 到 2.0+ 的 CategoricalDtype 或是 float/int 混合報錯。
+    """
+    if df is None or df.empty:
+        return df
+
+    import logging
+    # 1. 強制對齊欄位型態 (Columns)
+    if isinstance(df.columns, pd.CategoricalIndex):
+        logging.info(f"[{source_name}] 偵測到 CategoricalIndex，強制洗為 string")
+        df.columns = df.columns.astype(str)
+    elif df.columns.dtype != 'object':
+        try:
+            df.columns = df.columns.astype(str)
+        except: pass
+
+    # 2. 強制對齊索引型態 (Index) - 確保是時間格式
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index)
+        except Exception as e:
+            logging.warning(f"[{source_name}] Index 無法轉換為 DatetimeIndex: {e}")
+
+    return df
+
 class BaseDataProvider(ABC):
     """
     虛擬中介層 (Data Adapter) 基礎類別
