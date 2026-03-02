@@ -19,6 +19,7 @@ import graphviz
 import numpy as np
 from scipy.signal import argrelextrema
 from scipy.stats import linregress
+from data_provider import get_data_provider
 
 # --- Config ---
 st.set_page_config(page_title="Alpha Global v93.0", layout="wide", page_icon="📈")
@@ -523,6 +524,158 @@ def generate_ai_analysis(market, ticker, name, price, change, sector, technicals
 # ==========================================
 # 4. Logic Engines
 # ==========================================
+def detect_candlestick_patterns(df):
+    """
+    User requests:
+    - 晨星 (Morning Star) / 暮星 (Evening Star)
+    - 紅三兵 (Three White Soldiers) / 黑三鴉 (Three Black Crows)
+    - 吞噬 (Engulfing) / 烏雲罩頂 (Dark Cloud Cover) / 貫穿線 (Piercing Pattern)
+    - 孕線 (Harami)
+    - 實體K線 (Marubozu) / 十字星 (Doji)
+    - 錘子/吊人 (Hammer / Hanging Man) / 倒錘/流星 (Inverted Hammer / Shooting Star)
+
+    14-day average baselines, 10-day local extremes, priority scanning.
+    """
+    patterns = []
+    if len(df) < 15:
+        return patterns
+
+    # Define baseline metrics
+    df['Body'] = abs(df['Close'] - df['Open'])
+    df['AvgBody'] = df['Body'].rolling(14).mean()
+
+    # 10-day local extremes for trend detection
+    df['LocalHigh'] = df['High'].rolling(10).max()
+    df['LocalLow'] = df['Low'].rolling(10).min()
+
+    # Helper functions
+    def is_bullish(row): return row['Close'] > row['Open']
+    def is_bearish(row): return row['Close'] < row['Open']
+    def body_size(row): return abs(row['Close'] - row['Open'])
+    def is_doji(row): return body_size(row) <= row['AvgBody'] * 0.1
+    def is_marubozu(row): return body_size(row) >= row['AvgBody'] * 1.5 and (row['High'] - max(row['Open'], row['Close'])) < row['AvgBody'] * 0.1 and (min(row['Open'], row['Close']) - row['Low']) < row['AvgBody'] * 0.1
+    def upper_shadow(row): return row['High'] - max(row['Open'], row['Close'])
+    def lower_shadow(row): return min(row['Open'], row['Close']) - row['Low']
+    def at_support(row): return row['Low'] <= row['LocalLow'] * 1.02
+    def at_resistance(row): return row['High'] >= row['LocalHigh'] * 0.98
+
+    # Scan the entire history (or last 60 days to avoid clutter)
+    scan_df = df.tail(60)
+    if len(scan_df) < 3: return patterns
+
+    for i in range(2, len(scan_df)):
+        idx0 = scan_df.index[i-2]
+        idx1 = scan_df.index[i-1]
+        idx2 = scan_df.index[i]
+
+        row0 = scan_df.loc[idx0]
+        row1 = scan_df.loc[idx1]
+        row2 = scan_df.loc[idx2]
+
+        found = False
+
+        # Priority 1: Multi-Candle Patterns
+        if is_bearish(row0) and body_size(row0) > row0['AvgBody'] and \
+           is_bullish(row2) and body_size(row2) > row2['AvgBody'] and \
+           row2['Close'] > (row0['Open'] + row0['Close']) / 2 and \
+           body_size(row1) <= row1['AvgBody'] * 0.5 and \
+           max(row1['Open'], row1['Close']) < row0['Close'] and \
+           at_support(row1):
+            patterns.append({"name": "🌅 晨星 (Morning Star)", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
+            found = True
+
+        elif is_bullish(row0) and body_size(row0) > row0['AvgBody'] and \
+             is_bearish(row2) and body_size(row2) > row2['AvgBody'] and \
+             row2['Close'] < (row0['Open'] + row0['Close']) / 2 and \
+             body_size(row1) <= row1['AvgBody'] * 0.5 and \
+             min(row1['Open'], row1['Close']) > row0['Close'] and \
+             at_resistance(row1):
+            patterns.append({"name": "🌃 暮星 (Evening Star)", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
+            found = True
+
+        elif is_bullish(row0) and is_bullish(row1) and is_bullish(row2) and \
+             row1['Close'] > row0['Close'] and row2['Close'] > row1['Close'] and \
+             row1['Open'] > row0['Open'] and row2['Open'] > row1['Open'] and \
+             body_size(row0) > row0['AvgBody'] and body_size(row1) > row1['AvgBody'] and body_size(row2) > row2['AvgBody']:
+             patterns.append({"name": "🚀 紅三兵", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
+             found = True
+
+        elif is_bearish(row0) and is_bearish(row1) and is_bearish(row2) and \
+             row1['Close'] < row0['Close'] and row2['Close'] < row1['Close'] and \
+             row1['Open'] < row0['Open'] and row2['Open'] < row1['Open'] and \
+             body_size(row0) > row0['AvgBody'] and body_size(row1) > row1['AvgBody'] and body_size(row2) > row2['AvgBody']:
+             patterns.append({"name": "🦅 黑三鴉", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
+             found = True
+
+        # Priority 2: Two-Candle Patterns
+        if not found:
+            if is_bearish(row1) and is_bullish(row2) and \
+               row2['Open'] < row1['Close'] and row2['Close'] > row1['Open'] and \
+               at_support(row1):
+                patterns.append({"name": "🟢 多頭吞噬", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bullish(row1) and is_bearish(row2) and \
+                 row2['Open'] > row1['Close'] and row2['Close'] < row1['Open'] and \
+                 at_resistance(row1):
+                patterns.append({"name": "🔴 空頭吞噬", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bullish(row1) and body_size(row1) > row1['AvgBody'] and \
+                 is_bearish(row2) and body_size(row2) > row2['AvgBody'] and \
+                 row2['Open'] > row1['High'] and \
+                 row2['Close'] < (row1['Open'] + row1['Close']) / 2 and \
+                 row2['Close'] > row1['Open'] and \
+                 at_resistance(row1):
+                patterns.append({"name": "🌧️ 烏雲罩頂", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bearish(row1) and body_size(row1) > row1['AvgBody'] and \
+                 is_bullish(row2) and body_size(row2) > row2['AvgBody'] and \
+                 row2['Open'] < row1['Low'] and \
+                 row2['Close'] > (row1['Open'] + row1['Close']) / 2 and \
+                 row2['Close'] < row1['Open'] and \
+                 at_support(row1):
+                patterns.append({"name": "🗡️ 貫穿線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bearish(row1) and body_size(row1) > row1['AvgBody'] and \
+                 is_bullish(row2) and body_size(row2) < row2['AvgBody'] and \
+                 row2['Open'] > row1['Close'] and row2['Close'] < row1['Open'] and \
+                 at_support(row1):
+                 patterns.append({"name": "🤰 多頭孕線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                 found = True
+
+            elif is_bullish(row1) and body_size(row1) > row1['AvgBody'] and \
+                 is_bearish(row2) and body_size(row2) < row2['AvgBody'] and \
+                 row2['Open'] < row1['Close'] and row2['Close'] > row1['Open'] and \
+                 at_resistance(row1):
+                 patterns.append({"name": "🤰 空頭孕線", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                 found = True
+
+        # Priority 3: Single-Candle Patterns (Only mark if significant)
+        if not found:
+            if is_marubozu(row2) and (at_support(row2) or at_resistance(row2)):
+                if is_bullish(row2):
+                    patterns.append({"name": "🟩 大長紅", "date": idx2, "type": "Bullish", "points": [idx2]})
+                else:
+                    patterns.append({"name": "🟥 大長黑", "date": idx2, "type": "Bearish", "points": [idx2]})
+            elif is_doji(row2) and (at_support(row2) or at_resistance(row2)):
+                patterns.append({"name": "➕ 十字星", "date": idx2, "type": "Neutral", "points": [idx2]})
+            else:
+                if lower_shadow(row2) >= 2 * body_size(row2) and upper_shadow(row2) <= body_size(row2) * 0.2:
+                    if at_support(row2):
+                        patterns.append({"name": "🔨 錘子", "date": idx2, "type": "Bullish", "points": [idx2]})
+                    elif at_resistance(row2):
+                        patterns.append({"name": "🪝 吊人", "date": idx2, "type": "Bearish", "points": [idx2]})
+                elif upper_shadow(row2) >= 2 * body_size(row2) and lower_shadow(row2) <= body_size(row2) * 0.2:
+                    if at_support(row2):
+                        patterns.append({"name": "🏹 倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
+                    elif at_resistance(row2):
+                        patterns.append({"name": "🌠 流星", "date": idx2, "type": "Bearish", "points": [idx2]})
+
+    return patterns
+
 def detect_complex_patterns(df, peaks, troughs):
     patterns = []
     if df.empty or len(peaks) < 2: return patterns
@@ -612,27 +765,19 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
     if timeframe == "1wk": interval = "1wk"; period = "5y"; is_weekly = True
     else: interval = "1d"; period = "2y"; is_weekly = False
 
-    if "台股" in market: suffixes = [".TW", ".TWO"]; ma_short, ma_long = 5, 20
-    else: suffixes = [""]; ma_short, ma_long = 20, 50
+    market_type = "TW" if "台股" in market else "US"
+    if market_type == "TW": ma_short, ma_long = 5, 20
+    else: ma_short, ma_long = 20, 50
 
-    stock = None; df = pd.DataFrame(); final_full_t = ""
+    # Use Data Provider layer instead of raw yf
+    provider = get_data_provider("yfinance", market_type=market_type)
+    df = provider.get_historical_data(ticker, period=period, interval=interval)
 
-    for suffix in suffixes:
-        try_t = f"{ticker}{suffix}" if str(ticker).endswith(suffix) == False and suffix != "" else ticker
-        try:
-            d = yf.download(try_t, period=period, interval=interval, progress=False, auto_adjust=False)
-
-            if not d.empty:
-                if isinstance(d.columns, pd.MultiIndex):
-                    d.columns = d.columns.get_level_values(0)
-
-                if 'Close' in d.columns and len(d) > 30:
-                    stock = yf.Ticker(try_t)
-                    df = d; final_full_t = try_t; break
-        except Exception: continue
-
-    if df.empty: return None
+    if df.empty or len(df) <= 30: return None
     try:
+        info_data = provider.get_stock_info(ticker)
+        final_full_t = info_data.get('raw_ticker', ticker)
+
         close = df['Close'].iloc[-1]; chg = ((close - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
         vol_curr = df['Volume'].iloc[-1]; vol_avg = df['Volume'].iloc[:-5].mean()
         r_vol = vol_curr / vol_avg if vol_avg > 0 else 0
@@ -648,25 +793,22 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
         signal_str = analyze_signals(df)
 
         name = st.session_state.dynamic_name_map.get(ticker, ticker)
-        try:
-            info = stock.info
-            name = info.get('longName', name)
-            pe = info.get('trailingPE', 'N/A')
-            eps = info.get('trailingEps', 'N/A')
-            dy = info.get('dividendYield', None)
-            if dy is not None: div_yield = f"{dy*100:.2f}%"
-            else: div_yield = "N/A"
-        except:
-            pe, eps, div_yield = 'N/A', 'N/A', 'N/A'
+        if info_data['name'] != ticker:
+            name = info_data['name']
+        pe = info_data.get('pe', 'N/A')
+        eps = info_data.get('eps', 'N/A')
+        div_yield = info_data.get('yield', 'N/A')
 
         if name == ticker and user_query_name: name = user_query_name
 
         verdict = calculate_trend_logic(df, is_weekly=is_weekly)
         patterns = detect_complex_patterns(df, df['peaks'].dropna(), df['troughs'].dropna())
+        candle_patterns = detect_candlestick_patterns(df)
 
         # [Fix]: Define extra safely
         extra = f"趨勢: {verdict.get('trend')}。{verdict.get('signal')}。"
         if patterns: extra += f" 型態: {', '.join([p['name'] for p in patterns])}。"
+        if candle_patterns: extra += f" K線: {', '.join([p['name'] for p in candle_patterns])}。"
 
         tech_summary = f"RSI:{round(df['RSI'].iloc[-1],1)} MACD:{'多' if df['MACD'].iloc[-1]>0 else '空'}"
 
@@ -676,7 +818,7 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
             "短均": round(ma_s, 1), "長均": round(ma_l, 1), "RSI": round(df['RSI'].iloc[-1], 1),
             "PE": pe, "EPS": eps, "Yield": div_yield,
             "df": df, "verdict": verdict, "extra_info": extra + " " + tech_summary,
-            "patterns": patterns, "signal_context": signal_str
+            "patterns": patterns, "candle_patterns": candle_patterns, "signal_context": signal_str
         }
     except Exception:
         return None
@@ -685,8 +827,11 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
     if timeframe == "1wk": interval = "1wk"; period = "5y"; is_weekly = True
     else: interval = "1d"; period = "2y"; is_weekly = False
 
-    if "台股" in market: suffixes = [".TW", ".TWO"]; ma_short, ma_long = 5, 20
-    else: suffixes = [""]; ma_short, ma_long = 20, 50
+    market_type = "TW" if "台股" in market else "US"
+    if market_type == "TW": ma_short, ma_long = 5, 20
+    else: ma_short, ma_long = 20, 50
+
+    provider = get_data_provider("yfinance", market_type=market_type)
 
     all_data = []
     unique_tickers = []
@@ -702,17 +847,13 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
     for i, t in enumerate(unique_tickers):
         st_text.text(f"掃描中: {t}...");
         if (i+1) <= len(unique_tickers): progress.progress((i+1)/len(unique_tickers))
-        stock = None; df = pd.DataFrame(); final_t = t
-        for suf in suffixes:
-            try_t = f"{t}{suf}" if str(t).endswith(suf) == False and suf != "" else t
-            try:
-                d = yf.download(try_t, period=period, interval=interval, progress=False, auto_adjust=False)
-                if not d.empty:
-                    if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
-                    if 'Close' in d.columns and len(d) > 30:
-                        stock = yf.Ticker(try_t); df = d; final_t = try_t; break
-            except: continue
-        if df.empty: continue
+
+        df = provider.get_historical_data(t, period=period, interval=interval)
+        if df.empty or len(df) <= 30: continue
+
+        info_data = provider.get_stock_info(t)
+        final_t = info_data.get('raw_ticker', t)
+
         try:
             close = df['Close'].iloc[-1]; chg = ((close - df['Close'].iloc[-2])/df['Close'].iloc[-2])*100
             ma_s = df['Close'].rolling(ma_short).mean().iloc[-1]; ma_l = df['Close'].rolling(ma_long).mean().iloc[-1]
@@ -725,13 +866,14 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
             verdict = calculate_trend_logic(df, is_weekly=is_weekly)
             clean = t.replace(".TW","").replace(".TWO","")
             patterns = detect_complex_patterns(df, df['peaks'].dropna(), df['troughs'].dropna())
+            candle_patterns = detect_candlestick_patterns(df)
             signal_str = analyze_signals(df)
 
             all_data.append({
                 "代碼": clean, "名稱": st.session_state.dynamic_name_map.get(clean, clean), "族群": ticker_to_sector.get(t, "其他"),
                 "現價": round(close, 2), "漲跌幅%": round(chg, 2), "爆量倍數": 0, "趨勢": verdict['trend'].split(" ")[0],
                 "短均": round(ma_s, 1), "長均": round(ma_l, 1), "RSI": round(df['RSI'].iloc[-1], 1), "t_color": "#f3f4f6", "t_border": "#9ca3af", "raw_ticker": final_t, "df": df,
-                "patterns": patterns, "verdict": verdict, "signal_context": signal_str
+                "patterns": patterns, "candle_patterns": candle_patterns, "verdict": verdict, "signal_context": signal_str
             })
         except: continue
     progress.empty(); st_text.empty()
@@ -765,10 +907,14 @@ def render_supply_chain_graph(keyword, structure, market):
         st.warning("⚠️ 無法繪製供應鏈圖 (可能是電腦未安裝 Graphviz 軟體)，改為顯示文字清單：")
         st.write(structure)
 
-def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly=False):
+def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly=False, candle_patterns=None):
     try:
-        # User requested a highly simplified chart: Price + Volume + Gaps + S/R Lines only.
         rows = 2
+
+        if "台股" in market: ma_s='MA5'; ma_l='MA20'; s_win=5; l_win=20
+        else: ma_s='MA20'; ma_l='MA50'; s_win=20; l_win=50
+        df[ma_s] = df['Close'].rolling(s_win).mean()
+        df[ma_l] = df['Close'].rolling(l_win).mean()
 
         n = 10
         df['peaks'] = df.iloc[argrelextrema(df.Close.values, np.greater_equal, order=n)[0]]['Close']
@@ -778,20 +924,55 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
 
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#ef4444', decreasing_line_color='#22c55e'), row=1, col=1)
 
+        if st.session_state.chart_settings.get('ma', True):
+            fig.add_trace(go.Scatter(x=df.index, y=df[ma_s], line=dict(color='orange', width=1), name=f'{ma_s}'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df[ma_l], line=dict(color='blue', width=1), name=f'{ma_l}'), row=1, col=1)
+
+        if st.session_state.chart_settings.get('bbands', False) and 'BB_Upper' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='gray', width=1, dash='dot'), name='BB上軌'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='gray', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(200,200,200,0.1)', name='BB下軌'), row=1, col=1)
+
         y_min = df['Low'].min() * 0.95; y_max = df['High'].max() * 1.05
         fig.update_yaxes(range=[y_min, y_max], fixedrange=False, row=1, col=1)
 
         # Draw Support and Resistance lines (based on peaks/troughs logic)
         if st.session_state.chart_settings.get('trendline', True):
             peaks, troughs = df['peaks'].dropna(), df['troughs'].dropna()
+
+            # Draw Convergence & Reversal Zone
+            zone_data = calculate_pattern_convergence(df, peaks, troughs)
+            if zone_data:
+                z_start_date = get_date_from_index(zone_data['x_zone_start'], df, is_weekly)
+                z_end_date = get_date_from_index(zone_data['x_zone_end'], df, is_weekly)
+                apex_date = get_date_from_index(zone_data['x_int'], df, is_weekly)
+
+                # Render Reversal Zone Rectangle
+                fig.add_vrect(
+                    x0=z_start_date, x1=z_end_date,
+                    fillcolor="rgba(255, 165, 0, 0.2)", layer="below", line_width=0,
+                    annotation_text="轉折熱區", annotation_position="top left"
+                )
+
+                # Render Apex Point Marker
+                if zone_data['x_int'] > len(df) * 0.5: # 確保交點合理
+                    fig.add_trace(go.Scatter(
+                        x=[apex_date], y=[zone_data['y_int']],
+                        mode='markers', marker=dict(color="purple", size=8, symbol="star"),
+                        name='預期收斂點 (Apex)'
+                    ), row=1, col=1)
+
             if len(peaks) >= 2:
                 p1_idx, p2_idx = peaks.index[-2], peaks.index[-1]; p1_val, p2_val = peaks.iloc[-2], peaks.iloc[-1]
                 fig.add_trace(go.Scatter(x=[p1_idx, p2_idx], y=[p1_val, p2_val], mode='lines', line=dict(color="Red", width=1.5, dash="dash"), name='壓力線'), row=1, col=1)
                 # Extension to current date
                 x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
                 if x2 != x1:
-                    slope = (p2_val - p1_val) / (x2 - x1); proj = p2_val + slope * (len(df)-1 - x2)
-                    fig.add_trace(go.Scatter(x=[p2_idx, df.index[-1]], y=[p2_val, proj], mode='lines', line=dict(color="Red", width=1, dash="dot"), name='壓力線延伸'), row=1, col=1)
+                    slope = (p2_val - p1_val) / (x2 - x1)
+                    # Use get_date_from_index if extending into future based on zone_data, else just current edge
+                    end_idx_for_line = max(int(zone_data['x_int']) + 2 if zone_data else len(df)-1, len(df)-1)
+                    end_date = get_date_from_index(end_idx_for_line, df, is_weekly)
+                    proj = p2_val + slope * (end_idx_for_line - x2)
+                    fig.add_trace(go.Scatter(x=[p2_idx, end_date], y=[p2_val, proj], mode='lines', line=dict(color="Red", width=1, dash="dot"), name='壓力線延伸'), row=1, col=1)
 
             if len(troughs) >= 2:
                 t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]; t1_val, t2_val = troughs.iloc[-2], troughs.iloc[-1]
@@ -799,8 +980,11 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                 # Extension to current date
                 x1, x2 = df.index.get_loc(t1_idx), df.index.get_loc(t2_idx)
                 if x2 != x1:
-                    slope = (t2_val - t1_val) / (x2 - x1); proj = t2_val + slope * (len(df)-1 - x2)
-                    fig.add_trace(go.Scatter(x=[t2_idx, df.index[-1]], y=[t2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='支撐線延伸'), row=1, col=1)
+                    slope = (t2_val - t1_val) / (x2 - x1)
+                    end_idx_for_line = max(int(zone_data['x_int']) + 2 if zone_data else len(df)-1, len(df)-1)
+                    end_date = get_date_from_index(end_idx_for_line, df, is_weekly)
+                    proj = t2_val + slope * (end_idx_for_line - x2)
+                    fig.add_trace(go.Scatter(x=[t2_idx, end_date], y=[t2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='支撐線延伸'), row=1, col=1)
 
         # [New] Implement Gap Visualization (跳空)
         if st.session_state.chart_settings.get('gaps', True):
@@ -820,11 +1004,28 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                 if curr_low > prev_high * 1.005:
                     fig.add_shape(type="rect", x0=df.index[i-1], x1=df.index[i], y0=prev_high, y1=curr_low,
                                   line=dict(width=0), fillcolor="rgba(34, 197, 94, 0.3)", row=1, col=1)
+                    # Extend Support Line
+                    fig.add_trace(go.Scatter(x=[df.index[i], df.index[-1]], y=[prev_high, prev_high], mode='lines', line=dict(color="rgba(34, 197, 94, 0.5)", width=1, dash="dot"), showlegend=False), row=1, col=1)
 
                 # Draw Down Gap
                 if curr_high < prev_low * 0.995:
                     fig.add_shape(type="rect", x0=df.index[i-1], x1=df.index[i], y0=curr_high, y1=prev_low,
                                   line=dict(width=0), fillcolor="rgba(239, 68, 68, 0.3)", row=1, col=1)
+                    # Extend Resistance Line
+                    fig.add_trace(go.Scatter(x=[df.index[i], df.index[-1]], y=[prev_low, prev_low], mode='lines', line=dict(color="rgba(239, 68, 68, 0.5)", width=1, dash="dot"), showlegend=False), row=1, col=1)
+
+        # Candle Patterns Annotations
+        if st.session_state.chart_settings.get('candle_patterns', True) and candle_patterns:
+            for p in candle_patterns:
+                date = p['date']
+                y_val = df.loc[date, 'High'] * 1.02 if p['type'] == 'Bearish' else df.loc[date, 'Low'] * 0.98
+                fig.add_annotation(
+                    x=date, y=y_val,
+                    text=p['name'],
+                    showarrow=False,
+                    font=dict(color="red" if p['type'] == 'Bearish' else "green", size=10),
+                    row=1, col=1
+                )
 
         # Volume
         colors = ['#ef4444' if row['Close'] >= row['Open'] else '#22c55e' for index, row in df.iterrows()]
@@ -857,6 +1058,10 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         st.session_state.chart_settings['trendline'] = c1.checkbox("自動支撐壓力線", value=True)
         st.session_state.chart_settings['gaps'] = c2.checkbox("標示跳空缺口", value=True)
+        c3, c4 = st.columns(2)
+        st.session_state.chart_settings['ma'] = c3.checkbox("移動平均線 (MA)", value=True)
+        st.session_state.chart_settings['bbands'] = c4.checkbox("布林通道 (BBands)", value=False)
+        st.session_state.chart_settings['candle_patterns'] = st.checkbox("K線型態辨識", value=True)
     else:
         st.info("目前位於「量化回測系統」模式。")
 
@@ -1304,7 +1509,7 @@ elif app_mode == "📈 股市戰情室":
             st.markdown("---")
             st.markdown(f"**⚡ 深度掃描**：{data.get('signal_context', '無')}")
 
-        render_trend_chart(data['df'], patterns, st.session_state.market_mode, is_box=verdict.get('is_box', False), height=900, is_weekly=is_weekly)
+        render_trend_chart(data['df'], patterns, st.session_state.market_mode, is_box=verdict.get('is_box', False), height=900, is_weekly=is_weekly, candle_patterns=data.get('candle_patterns', []))
 
         # AI Report Display
         report_key = f"SINGLE_{data['代碼']}"
@@ -1372,7 +1577,7 @@ elif app_mode == "📈 股市戰情室":
 
                     st.markdown(f":{color}-background[**⚖️ {trend_val}**] | {row.get('signal_context', '')}")
 
-                    render_trend_chart(row['df'], row['patterns'], st.session_state.market_mode, is_box=row.get('verdict', {}).get('is_box', False), height=600, is_weekly=is_weekly)
+                    render_trend_chart(row['df'], row['patterns'], st.session_state.market_mode, is_box=row.get('verdict', {}).get('is_box', False), height=600, is_weekly=is_weekly, candle_patterns=row.get('candle_patterns', []))
 
                     cache_key = f"{st.session_state.market_mode}_{ticker}_{strategy_mode}"
                     if cache_key in st.session_state.ai_reports:

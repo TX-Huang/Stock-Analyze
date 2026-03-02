@@ -263,17 +263,47 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     final_pos = df_long + df_short
 
-    # 執行回測
-    if stop_loss is not None or take_profit is not None:
-        report = backtest.sim(
-            final_pos,
-            resample='D',
-            name='Isaac 策略 (壓力測試)',
-            upload=False,
-            stop_loss=stop_loss,
-            take_profit=take_profit
-        )
-    else:
-        report = backtest.sim(final_pos, resample='D', name='Isaac 策略 (全天候)', upload=False)
+    import logging
+    import os
 
-    return report
+    # --- 防禦性日誌：紀錄傳入 FinLab sim 的 DataFrame 結構 ---
+    log_file = "finlab_debug.log"
+    logging.basicConfig(filename=log_file, level=logging.INFO, format='%(asctime)s - %(message)s')
+
+    # 檢查並紀錄 final_pos 的結構
+    logging.info("--- 準備進入 backtest.sim ---")
+    logging.info(f"final_pos type: {type(final_pos)}")
+    logging.info(f"final_pos.columns type: {type(final_pos.columns)}")
+    if hasattr(final_pos.columns, 'dtype'):
+        logging.info(f"final_pos.columns.dtype: {final_pos.columns.dtype}")
+
+    # 如果是 CategoricalDtype，嘗試印出類別資訊
+    if isinstance(final_pos.columns, pd.CategoricalIndex):
+        logging.info(f"Categorical categories dtype: {final_pos.columns.categories.dtype}")
+        logging.info(f"Categorical ordered: {final_pos.columns.ordered}")
+
+    try:
+        # 強制對齊欄位為標準字串，防止 Pandas 版本在 merge/concat 時發生的 CategoricalDtype 錯誤
+        if isinstance(final_pos.columns, pd.CategoricalIndex):
+            logging.info("偵測到 CategoricalIndex，強制轉換為 string Index 以避免衝突")
+            final_pos.columns = final_pos.columns.astype(str)
+
+        # 執行回測
+        if stop_loss is not None or take_profit is not None:
+            report = backtest.sim(
+                final_pos,
+                resample='D',
+                name='Isaac 策略 (壓力測試)',
+                upload=False,
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
+        else:
+            report = backtest.sim(final_pos, resample='D', name='Isaac 策略 (全天候)', upload=False)
+
+        logging.info("backtest.sim 執行成功")
+        return report
+
+    except Exception as e:
+        logging.error(f"backtest.sim 崩潰: {str(e)}", exc_info=True)
+        raise e
