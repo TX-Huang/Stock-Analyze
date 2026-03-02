@@ -765,167 +765,72 @@ def render_supply_chain_graph(keyword, structure, market):
         st.warning("⚠️ 無法繪製供應鏈圖 (可能是電腦未安裝 Graphviz 軟體)，改為顯示文字清單：")
         st.write(structure)
 
-def render_trend_chart(df, patterns, market, is_box=False, height=900, is_weekly=False):
+def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly=False):
     try:
-        rows = 4
-        if "台股" in market: ma_s='MA5'; ma_l='MA20'; s_win=5; l_win=20
-        else: ma_s='MA20'; ma_l='MA50'; s_win=20; l_win=50
-        df[ma_s] = df['Close'].rolling(s_win).mean()
-        df[ma_l] = df['Close'].rolling(l_win).mean()
+        # User requested a highly simplified chart: Price + Volume + Gaps + S/R Lines only.
+        rows = 2
 
         n = 10
         df['peaks'] = df.iloc[argrelextrema(df.Close.values, np.greater_equal, order=n)[0]]['Close']
         df['troughs'] = df.iloc[argrelextrema(df.Close.values, np.less_equal, order=n)[0]]['Close']
-        if st.session_state.chart_settings['obv']: df['OBV'] = calculate_obv(df)
 
-        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.55, 0.15, 0.15, 0.15], subplot_titles=("價格與型態", "成交量", "MACD", "KD"))
+        fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2], subplot_titles=("價格與壓力/支撐", "成交量"))
 
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#ef4444', decreasing_line_color='#22c55e'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df[ma_s], line=dict(color='orange', width=1), name=f'{ma_s}'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df[ma_l], line=dict(color='blue', width=1), name=f'{ma_l}'), row=1, col=1)
-
-        # 結構分析線 (Structural Analysis)
-        if st.session_state.chart_settings.get('structure', True):
-            structure = calculate_structural_lines(df, lookback=100)
-
-            # 1. 繪製回歸通道 (Channel)
-            ch = structure.get('channel')
-            if ch:
-                # 中軌
-                fig.add_trace(go.Scatter(x=[ch['x_start'], ch['x_end']], y=[ch['y_start_mid'], ch['y_end_mid']],
-                                       mode='lines', line=dict(color='blue', width=1, dash='dash'), name='回歸中軌'), row=1, col=1)
-                # 上軌
-                fig.add_trace(go.Scatter(x=[ch['x_start'], ch['x_end']], y=[ch['y_start_upper'], ch['y_end_upper']],
-                                       mode='lines', line=dict(color='blue', width=1, dash='dot'), name='回歸上軌'), row=1, col=1)
-                # 下軌
-                fig.add_trace(go.Scatter(x=[ch['x_start'], ch['x_end']], y=[ch['y_start_lower'], ch['y_end_lower']],
-                                       mode='lines', line=dict(color='blue', width=1, dash='dot'), name='回歸下軌'), row=1, col=1)
-
-            # 2. 繪製水平支撐壓力 (Levels)
-            for lvl in structure.get('levels', []):
-                color = 'red' if lvl['price'] > df['Close'].iloc[-1] else 'green' # 壓力紅，支撐綠
-                width = min(lvl['strength'] * 0.5, 3) # 強度決定線粗細
-                fig.add_hline(y=lvl['price'], line_dash="solid", line_color=color, line_width=width, opacity=0.5,
-                             annotation_text=f"S/R: {lvl['price']:.1f}", annotation_position="top right", row=1, col=1)
-
-            # 3. [New] 型態收斂與轉折區 (Pattern Convergence)
-            conv = calculate_pattern_convergence(df, df['peaks'], df['troughs'])
-            if conv:
-                # 繪製延伸線直到 Apex
-                # 我們需要找到對應的日期
-                apex_date = get_date_from_index(conv['x_int'], df, is_weekly)
-
-                # 繪製壓力線 (Highs)
-                # p_y1 = m_p * x_curr + c_p -> 但我們直接畫到 Apex
-                curr_idx = len(df) - 1
-                curr_date = df.index[-1]
-
-                # 從最新的點畫到 Apex
-                fig.add_trace(go.Scatter(
-                    x=[curr_date, apex_date],
-                    y=[conv['m_p'] * curr_idx + conv['c_p'], conv['y_int']],
-                    mode='lines', line=dict(color='red', width=1, dash='dashdot'), name='結構壓力延伸'
-                ), row=1, col=1)
-
-                # 繪製支撐線 (Lows)
-                fig.add_trace(go.Scatter(
-                    x=[curr_date, apex_date],
-                    y=[conv['m_t'] * curr_idx + conv['c_t'], conv['y_int']],
-                    mode='lines', line=dict(color='green', width=1, dash='dashdot'), name='結構支撐延伸'
-                ), row=1, col=1)
-
-                # 4. 繪製轉折熱區 (2/3 ~ 3/4)
-                z_start_date = get_date_from_index(conv['x_zone_start'], df, is_weekly)
-                z_end_date = get_date_from_index(conv['x_zone_end'], df, is_weekly)
-
-                y_range_max = df['High'].max()
-                y_range_min = df['Low'].min()
-
-                fig.add_vrect(
-                    x0=z_start_date, x1=z_end_date,
-                    fillcolor="gold", opacity=0.15,
-                    layer="below", line_width=0,
-                    annotation_text="結構翻轉區 (2/3~3/4)", annotation_position="top left",
-                    row=1, col=1
-                )
-
-        if st.session_state.chart_settings['bbands'] and 'BB_Upper' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], line=dict(color='gray', width=1, dash='dot'), name='BB上軌'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], line=dict(color='gray', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(200,200,200,0.1)', name='BB下軌'), row=1, col=1)
 
         y_min = df['Low'].min() * 0.95; y_max = df['High'].max() * 1.05
-        # [CRITICAL UI FIX]: Add top margin (t=40) to prevent title cutoff
         fig.update_yaxes(range=[y_min, y_max], fixedrange=False, row=1, col=1)
-        if st.session_state.chart_settings['log_scale']:
-            fig.update_yaxes(type='log', range=[np.log10(y_min), np.log10(y_max)], row=1, col=1)
 
-        is_broadening = any(p.get('is_broadening') for p in patterns)
-        peaks, troughs = df['peaks'].dropna(), df['troughs'].dropna()
-
-        if is_box and st.session_state.chart_settings['rectangle']:
-            recent = df.tail(40); r_max, r_min = recent['High'].max(), recent['Low'].min()
-            fig.add_shape(type="rect", x0=recent.index[0], x1=recent.index[-1], y0=r_min, y1=r_max, line=dict(color="RoyalBlue", width=2, dash="dash"), fillcolor="rgba(65, 105, 225, 0.1)", row=1, col=1)
-            fig.add_annotation(x=recent.index[int(len(recent)/2)], y=r_max, text="📦 Box", showarrow=False, yshift=10, row=1, col=1)
-
-        elif is_broadening and st.session_state.chart_settings['broadening']:
-            for pat in patterns:
-                if pat.get('is_broadening'):
-                    p1_idx, p1_val = pat['p_coords'][0]; p2_idx, p2_val = pat['p_coords'][1]
-                    x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
-                    if x2 != x1:
-                        slope_p = (p2_val - p1_val) / (x2 - x1); end_p = p2_val + slope_p*10
-                        if end_p < y_max * 2: fig.add_trace(go.Scatter(x=[p1_idx, df.index[-1]], y=[p1_val, end_p], mode='lines', line=dict(color="Red", width=2), name='擴散頂'), row=1, col=1)
-                        t1_idx, t1_val = pat['t_coords'][0]; t2_idx, t2_val = pat['t_coords'][1]
-                        x1, x2 = df.index.get_loc(t1_idx), df.index.get_loc(t2_idx)
-                        slope_t = (t2_val - t1_val) / (x2 - x1); end_t = t2_val + slope_t*10
-                        if end_t > y_min * 0.5: fig.add_trace(go.Scatter(x=[t1_idx, df.index[-1]], y=[t1_val, end_t], mode='lines', line=dict(color="Green", width=2), name='擴散底'), row=1, col=1)
-
-        elif st.session_state.chart_settings['trendline'] or st.session_state.chart_settings['wedge']:
+        # Draw Support and Resistance lines (based on peaks/troughs logic)
+        if st.session_state.chart_settings.get('trendline', True):
+            peaks, troughs = df['peaks'].dropna(), df['troughs'].dropna()
             if len(peaks) >= 2:
                 p1_idx, p2_idx = peaks.index[-2], peaks.index[-1]; p1_val, p2_val = peaks.iloc[-2], peaks.iloc[-1]
                 fig.add_trace(go.Scatter(x=[p1_idx, p2_idx], y=[p1_val, p2_val], mode='lines', line=dict(color="Red", width=1.5, dash="dash"), name='壓力線'), row=1, col=1)
-                if st.session_state.chart_settings['ghost_lines']:
-                    x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
-                    if x2 != x1:
-                        slope = (p2_val - p1_val) / (x2 - x1); proj = p2_val + slope * (len(df)-1 - x2)
-                        if df['Close'].iloc[-1] > proj and proj < y_max * 1.5: fig.add_trace(go.Scatter(x=[p2_idx, df.index[-1]], y=[p2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='支撐互換'), row=1, col=1)
+                # Extension to current date
+                x1, x2 = df.index.get_loc(p1_idx), df.index.get_loc(p2_idx)
+                if x2 != x1:
+                    slope = (p2_val - p1_val) / (x2 - x1); proj = p2_val + slope * (len(df)-1 - x2)
+                    fig.add_trace(go.Scatter(x=[p2_idx, df.index[-1]], y=[p2_val, proj], mode='lines', line=dict(color="Red", width=1, dash="dot"), name='壓力線延伸'), row=1, col=1)
 
             if len(troughs) >= 2:
                 t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]; t1_val, t2_val = troughs.iloc[-2], troughs.iloc[-1]
                 fig.add_trace(go.Scatter(x=[t1_idx, t2_idx], y=[t1_val, t2_val], mode='lines', line=dict(color="Green", width=1.5, dash="dash"), name='支撐線'), row=1, col=1)
+                # Extension to current date
+                x1, x2 = df.index.get_loc(t1_idx), df.index.get_loc(t2_idx)
+                if x2 != x1:
+                    slope = (t2_val - t1_val) / (x2 - x1); proj = t2_val + slope * (len(df)-1 - x2)
+                    fig.add_trace(go.Scatter(x=[t2_idx, df.index[-1]], y=[t2_val, proj], mode='lines', line=dict(color="Green", width=1, dash="dot"), name='支撐線延伸'), row=1, col=1)
 
-        if st.session_state.chart_settings['patterns'] and patterns:
-            for pat in patterns:
-                end_date = pat['points'][-1]
-                fig.add_annotation(x=end_date, y=df.loc[end_date]['High'], text=pat['name'], showarrow=True, arrowhead=1, ax=0, ay=-30, font=dict(color="Blue", size=12, weight="bold"), row=1, col=1)
+        # [New] Implement Gap Visualization (跳空)
+        if st.session_state.chart_settings.get('gaps', True):
+            # Gap up: Today's Low > Yesterday's High
+            # Gap down: Today's High < Yesterday's Low
+            df['Prev_High'] = df['High'].shift(1)
+            df['Prev_Low'] = df['Low'].shift(1)
 
-        if st.session_state.chart_settings['rounding']:
-            lookback = 52 if is_weekly else 40; recent = df.tail(lookback)
-            if len(recent) == lookback:
-                x, y = np.arange(len(recent)), recent['Close'].values; coeffs = np.polyfit(x, y, 2)
-                r2 = 1 - (np.sum((y - np.poly1d(coeffs)(x))**2) / np.sum((y - np.mean(y))**2))
-                if r2 > 0.7:
-                    color = "Green" if coeffs[0] > 0 else "Red"
-                    fig.add_trace(go.Scatter(x=recent.index, y=np.poly1d(coeffs)(x), mode='lines', line=dict(color=color, width=2, dash='dot'), name='圓弧'), row=1, col=1)
+            # Find gaps (using slightly more than 0% to filter noise, e.g. 0.5% gap)
+            for i in range(1, len(df)):
+                curr_low = df['Low'].iloc[i]
+                prev_high = df['Prev_High'].iloc[i]
+                curr_high = df['High'].iloc[i]
+                prev_low = df['Prev_Low'].iloc[i]
 
+                # Draw Up Gap
+                if curr_low > prev_high * 1.005:
+                    fig.add_shape(type="rect", x0=df.index[i-1], x1=df.index[i], y0=prev_high, y1=curr_low,
+                                  line=dict(width=0), fillcolor="rgba(34, 197, 94, 0.3)", row=1, col=1)
+
+                # Draw Down Gap
+                if curr_high < prev_low * 0.995:
+                    fig.add_shape(type="rect", x0=df.index[i-1], x1=df.index[i], y0=curr_high, y1=prev_low,
+                                  line=dict(width=0), fillcolor="rgba(239, 68, 68, 0.3)", row=1, col=1)
+
+        # Volume
         colors = ['#ef4444' if row['Close'] >= row['Open'] else '#22c55e' for index, row in df.iterrows()]
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=2, col=1)
-        if st.session_state.chart_settings['obv'] and 'OBV' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['OBV'], line=dict(color='purple', width=1.5), name='OBV'), row=2, col=1)
 
-        if st.session_state.chart_settings['macd'] and 'MACD' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#2962ff', width=1.5), name='MACD'), row=3, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line=dict(color='#ff6d00', width=1.5), name='Signal'), row=3, col=1)
-            colors_macd = ['#22c55e' if v >= 0 else '#ef4444' for v in df['MACD_Hist']]
-            fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], marker_color=colors_macd, name='Hist'), row=3, col=1)
-
-        if st.session_state.chart_settings['kd'] and 'K' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#2962ff', width=1.5), name='K'), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#ff6d00', width=1.5), name='D'), row=4, col=1)
-            fig.add_hline(y=80, line_dash="dot", line_color="gray", row=4, col=1)
-            fig.add_hline(y=20, line_dash="dot", line_color="gray", row=4, col=1)
-
-        fig.update_layout(height=height + (100 if rows==3 else 0), margin=dict(l=10, r=10, t=40, b=10), xaxis_rangeslider_visible=False, showlegend=True)
+        fig.update_layout(height=height, margin=dict(l=10, r=10, t=40, b=10), xaxis_rangeslider_visible=False, showlegend=True)
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e: st.error(f"繪圖錯誤: {e}")
 
@@ -950,25 +855,8 @@ with st.sidebar:
         st.divider()
         st.markdown("### ⚖️ 判官工具箱")
         c1, c2 = st.columns(2)
-        st.session_state.chart_settings['trendline'] = c1.checkbox("趨勢線", value=True)
-        st.session_state.chart_settings['patterns'] = c2.checkbox("幾何型態", value=True)
-        c3, c4 = st.columns(2)
-        st.session_state.chart_settings['support'] = c3.checkbox("支撐壓力", value=True)
-        st.session_state.chart_settings['ghost_lines'] = c4.checkbox("鬼影線", value=True)
-        st.markdown("---")
-        st.session_state.chart_settings['volume_strict'] = st.checkbox("🔍 嚴格成交量", value=True)
-        st.session_state.chart_settings['rectangle'] = st.checkbox("矩形(Box)", value=True)
-        st.session_state.chart_settings['broadening'] = st.checkbox("擴散(喇叭)", value=True)
-        st.session_state.chart_settings['rounding'] = st.checkbox("圓弧頂底", value=True)
-        st.session_state.chart_settings['log_scale'] = st.checkbox("對數座標", value=False)
-        st.session_state.chart_settings['diamond'] = st.checkbox("鑽石型態", value=True)
-        st.session_state.chart_settings['wedge'] = st.checkbox("楔形判斷", value=True)
-        st.markdown("---")
-        st.session_state.chart_settings['structure'] = st.checkbox("🏛️ 結構通道 (新功能)", value=True) # UI added here
-        st.session_state.chart_settings['bbands'] = st.checkbox("布林通道", value=True)
-        st.session_state.chart_settings['macd'] = st.checkbox("MACD", value=True)
-        st.session_state.chart_settings['kd'] = st.checkbox("KD 指標", value=True)
-        st.session_state.chart_settings['obv'] = st.checkbox("OBV 能量潮", value=True)
+        st.session_state.chart_settings['trendline'] = c1.checkbox("自動支撐壓力線", value=True)
+        st.session_state.chart_settings['gaps'] = c2.checkbox("標示跳空缺口", value=True)
     else:
         st.info("目前位於「量化回測系統」模式。")
 
