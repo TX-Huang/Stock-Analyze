@@ -577,7 +577,7 @@ def detect_candlestick_patterns(df):
            row2['Close'] > (row0['Open'] + row0['Close']) / 2 and \
            row1['Body'] <= row1['AvgBody'] * 0.5 and \
            max(row1['Open'], row1['Close']) < row0['Close'] and is_downtrend:
-            patterns.append({"name": "🌅 晨星 (Morning Star)", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
+            patterns.append({"name": "晨星 (Morning Star)", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
             found = True
 
         elif is_bullish(row0) and row0['Body'] > row0['AvgBody'] and \
@@ -585,19 +585,19 @@ def detect_candlestick_patterns(df):
              row2['Close'] < (row0['Open'] + row0['Close']) / 2 and \
              row1['Body'] <= row1['AvgBody'] * 0.5 and \
              min(row1['Open'], row1['Close']) > row0['Close'] and is_uptrend:
-            patterns.append({"name": "🌃 暮星 (Evening Star)", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
+            patterns.append({"name": "暮星 (Evening Star)", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
             found = True
 
         # Priority 2: Two-Candle
         if not found:
             if is_bearish(row1) and is_bullish(row2) and \
                row2['Open'] < row1['Close'] and row2['Close'] > row1['Open'] and is_downtrend:
-                patterns.append({"name": "🟢 多頭吞噬", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                patterns.append({"name": "多頭吞噬", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bullish(row1) and is_bearish(row2) and \
                  row2['Open'] > row1['Close'] and row2['Close'] < row1['Open'] and is_uptrend:
-                patterns.append({"name": "🔴 空頭吞噬", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                patterns.append({"name": "空頭吞噬", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bullish(row1) and row1['Body'] > row1['AvgBody'] and \
@@ -605,7 +605,7 @@ def detect_candlestick_patterns(df):
                  row2['Open'] > row1['High'] and \
                  row2['Close'] < (row1['Open'] + row1['Close']) / 2 and \
                  row2['Close'] > row1['Open'] and is_uptrend:
-                patterns.append({"name": "🌧️ 烏雲罩頂", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                patterns.append({"name": "烏雲罩頂", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bearish(row1) and row1['Body'] > row1['AvgBody'] and \
@@ -613,7 +613,7 @@ def detect_candlestick_patterns(df):
                  row2['Open'] < row1['Low'] and \
                  row2['Close'] > (row1['Open'] + row1['Close']) / 2 and \
                  row2['Close'] < row1['Open'] and is_downtrend:
-                patterns.append({"name": "🗡️ 貫穿線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                patterns.append({"name": "貫穿線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
                 found = True
 
         # Priority 3: Single-Candle
@@ -623,22 +623,22 @@ def detect_candlestick_patterns(df):
 
             if is_marubozu and (is_downtrend or is_uptrend):
                 if is_bullish(row2):
-                    patterns.append({"name": "🟩 大長紅", "date": idx2, "type": "Bullish", "points": [idx2]})
+                    patterns.append({"name": "大長紅", "date": idx2, "type": "Bullish", "points": [idx2]})
                 else:
-                    patterns.append({"name": "🟥 大長黑", "date": idx2, "type": "Bearish", "points": [idx2]})
+                    patterns.append({"name": "大長黑", "date": idx2, "type": "Bearish", "points": [idx2]})
             elif is_doji and (is_downtrend or is_uptrend):
-                patterns.append({"name": "➕ 十字星", "date": idx2, "type": "Neutral", "points": [idx2]})
+                patterns.append({"name": "十字星", "date": idx2, "type": "Neutral", "points": [idx2]})
             else:
                 if lower_shadow(row2) >= 2 * row2['Body'] and upper_shadow(row2) <= row2['Body'] * 0.2:
                     if is_downtrend:
-                        patterns.append({"name": "🔨 錘子", "date": idx2, "type": "Bullish", "points": [idx2]})
+                        patterns.append({"name": "錘子", "date": idx2, "type": "Bullish", "points": [idx2]})
                     elif is_uptrend:
-                        patterns.append({"name": "🪝 吊人", "date": idx2, "type": "Bearish", "points": [idx2]})
+                        patterns.append({"name": "吊人", "date": idx2, "type": "Bearish", "points": [idx2]})
                 elif upper_shadow(row2) >= 2 * row2['Body'] and lower_shadow(row2) <= row2['Body'] * 0.2:
                     if is_downtrend:
-                        patterns.append({"name": "🏹 倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
+                        patterns.append({"name": "倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
                     elif is_uptrend:
-                        patterns.append({"name": "🌠 流星", "date": idx2, "type": "Bearish", "points": [idx2]})
+                        patterns.append({"name": "流星", "date": idx2, "type": "Bearish", "points": [idx2]})
 
     return patterns
 
@@ -683,7 +683,7 @@ def detect_candlestick_patterns(df):
            body_size(row1) <= row1['AvgBody'] * 0.5 and \
            max(row1['Open'], row1['Close']) < row0['Close'] and \
            at_support(row1):
-            patterns.append({"name": "🌅 晨星 (Morning Star)", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
+            patterns.append({"name": "晨星 (Morning Star)", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
             found = True
 
         elif is_bullish(row0) and body_size(row0) > row0['AvgBody'] and \
@@ -692,21 +692,21 @@ def detect_candlestick_patterns(df):
              body_size(row1) <= row1['AvgBody'] * 0.5 and \
              min(row1['Open'], row1['Close']) > row0['Close'] and \
              at_resistance(row1):
-            patterns.append({"name": "🌃 暮星 (Evening Star)", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
+            patterns.append({"name": "暮星 (Evening Star)", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
             found = True
 
         elif is_bullish(row0) and is_bullish(row1) and is_bullish(row2) and \
              row1['Close'] > row0['Close'] and row2['Close'] > row1['Close'] and \
              row1['Open'] > row0['Open'] and row2['Open'] > row1['Open'] and \
              body_size(row0) > row0['AvgBody'] and body_size(row1) > row1['AvgBody'] and body_size(row2) > row2['AvgBody']:
-             patterns.append({"name": "🚀 紅三兵", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
+             patterns.append({"name": "紅三兵", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
              found = True
 
         elif is_bearish(row0) and is_bearish(row1) and is_bearish(row2) and \
              row1['Close'] < row0['Close'] and row2['Close'] < row1['Close'] and \
              row1['Open'] < row0['Open'] and row2['Open'] < row1['Open'] and \
              body_size(row0) > row0['AvgBody'] and body_size(row1) > row1['AvgBody'] and body_size(row2) > row2['AvgBody']:
-             patterns.append({"name": "🦅 黑三鴉", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
+             patterns.append({"name": "黑三鴉", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
              found = True
 
         # Priority 2: Two-Candle Patterns
@@ -714,13 +714,13 @@ def detect_candlestick_patterns(df):
             if is_bearish(row1) and is_bullish(row2) and \
                row2['Open'] < row1['Close'] and row2['Close'] > row1['Open'] and \
                at_support(row1):
-                patterns.append({"name": "🟢 多頭吞噬", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                patterns.append({"name": "多頭吞噬", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bullish(row1) and is_bearish(row2) and \
                  row2['Open'] > row1['Close'] and row2['Close'] < row1['Open'] and \
                  at_resistance(row1):
-                patterns.append({"name": "🔴 空頭吞噬", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                patterns.append({"name": "空頭吞噬", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bullish(row1) and body_size(row1) > row1['AvgBody'] and \
@@ -729,7 +729,7 @@ def detect_candlestick_patterns(df):
                  row2['Close'] < (row1['Open'] + row1['Close']) / 2 and \
                  row2['Close'] > row1['Open'] and \
                  at_resistance(row1):
-                patterns.append({"name": "🌧️ 烏雲罩頂", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                patterns.append({"name": "烏雲罩頂", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bearish(row1) and body_size(row1) > row1['AvgBody'] and \
@@ -738,43 +738,43 @@ def detect_candlestick_patterns(df):
                  row2['Close'] > (row1['Open'] + row1['Close']) / 2 and \
                  row2['Close'] < row1['Open'] and \
                  at_support(row1):
-                patterns.append({"name": "🗡️ 貫穿線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                patterns.append({"name": "貫穿線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
                 found = True
 
             elif is_bearish(row1) and body_size(row1) > row1['AvgBody'] and \
                  is_bullish(row2) and body_size(row2) < row2['AvgBody'] and \
                  row2['Open'] > row1['Close'] and row2['Close'] < row1['Open'] and \
                  at_support(row1):
-                 patterns.append({"name": "🤰 多頭孕線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                 patterns.append({"name": "多頭孕線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
                  found = True
 
             elif is_bullish(row1) and body_size(row1) > row1['AvgBody'] and \
                  is_bearish(row2) and body_size(row2) < row2['AvgBody'] and \
                  row2['Open'] < row1['Close'] and row2['Close'] > row1['Open'] and \
                  at_resistance(row1):
-                 patterns.append({"name": "🤰 空頭孕線", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                 patterns.append({"name": "空頭孕線", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
                  found = True
 
         # Priority 3: Single-Candle Patterns (Only mark if significant)
         if not found:
             if is_marubozu(row2) and (at_support(row2) or at_resistance(row2)):
                 if is_bullish(row2):
-                    patterns.append({"name": "🟩 大長紅", "date": idx2, "type": "Bullish", "points": [idx2]})
+                    patterns.append({"name": "大長紅", "date": idx2, "type": "Bullish", "points": [idx2]})
                 else:
-                    patterns.append({"name": "🟥 大長黑", "date": idx2, "type": "Bearish", "points": [idx2]})
+                    patterns.append({"name": "大長黑", "date": idx2, "type": "Bearish", "points": [idx2]})
             elif is_doji(row2) and (at_support(row2) or at_resistance(row2)):
-                patterns.append({"name": "➕ 十字星", "date": idx2, "type": "Neutral", "points": [idx2]})
+                patterns.append({"name": "十字星", "date": idx2, "type": "Neutral", "points": [idx2]})
             else:
                 if lower_shadow(row2) >= 2 * body_size(row2) and upper_shadow(row2) <= body_size(row2) * 0.2:
                     if at_support(row2):
-                        patterns.append({"name": "🔨 錘子", "date": idx2, "type": "Bullish", "points": [idx2]})
+                        patterns.append({"name": "錘子", "date": idx2, "type": "Bullish", "points": [idx2]})
                     elif at_resistance(row2):
-                        patterns.append({"name": "🪝 吊人", "date": idx2, "type": "Bearish", "points": [idx2]})
+                        patterns.append({"name": "吊人", "date": idx2, "type": "Bearish", "points": [idx2]})
                 elif upper_shadow(row2) >= 2 * body_size(row2) and lower_shadow(row2) <= body_size(row2) * 0.2:
                     if at_support(row2):
-                        patterns.append({"name": "🏹 倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
+                        patterns.append({"name": "倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
                     elif at_resistance(row2):
-                        patterns.append({"name": "🌠 流星", "date": idx2, "type": "Bearish", "points": [idx2]})
+                        patterns.append({"name": "流星", "date": idx2, "type": "Bearish", "points": [idx2]})
 
     return patterns
 
@@ -786,7 +786,7 @@ def detect_complex_patterns(df, peaks, troughs):
         p1, p2, p3 = peaks.iloc[-3], peaks.iloc[-2], peaks.iloc[-1]
         t1, t2, t3 = troughs.iloc[-3], troughs.iloc[-2], troughs.iloc[-1]
         if (p2 > p1 and p2 > p3) and (t2 < t1 and t2 < t3):
-            patterns.append({"name": "💎 鑽石頂", "points": [peaks.index[-3], peaks.index[-1]], "type": "Bearish", "is_broadening": False})
+            patterns.append({"name": "鑽石頂", "points": [peaks.index[-3], peaks.index[-1]], "type": "Bearish", "is_broadening": False})
 
     if len(peaks) >= 2 and len(troughs) >= 2:
         p1, p2 = peaks.iloc[-2], peaks.iloc[-1]
@@ -795,7 +795,7 @@ def detect_complex_patterns(df, peaks, troughs):
         t1_idx, t2_idx = troughs.index[-2], troughs.index[-1]
         if p2 > p1 and t2 < t1:
             patterns.append({
-                "name": "🎺 擴散", "points": [p1_idx, p2_idx], "type": "Volatility", "is_broadening": True,
+                "name": "擴散", "points": [p1_idx, p2_idx], "type": "Volatility", "is_broadening": True,
                 "p_coords": [(p1_idx, p1), (p2_idx, p2)], "t_coords": [(t1_idx, t1), (t2_idx, t2)]
             })
 
@@ -829,13 +829,13 @@ def calculate_trend_logic(df, n=10, is_weekly=False):
 
     volatility = df['Close'].rolling(5).std() / df['Close']
     if volatility.iloc[-1] < 0.005:
-        verdict["trend"] = "🌀 線圈狀態"; verdict["color"] = "orange"; verdict["details"].append("波動率極度壓縮")
+        verdict["trend"] = "線圈狀態"; verdict["color"] = "orange"; verdict["details"].append("波動率極度壓縮")
 
     recent = df.tail(40)
     r_max, r_min = recent['High'].max(), recent['Low'].min()
     if (r_max - r_min) / r_min < 0.10:
-        verdict["trend"] = "📦 矩形整理"; verdict["color"] = "blue"; verdict["is_box"] = True
-        if df['Close'].iloc[-1] > r_max * 1.01: verdict["signal"] = "🚀 箱型突破"; verdict["color"] = "green"
+        verdict["trend"] = "矩形整理"; verdict["color"] = "blue"; verdict["is_box"] = True
+        if df['Close'].iloc[-1] > r_max * 1.01: verdict["signal"] = "箱型突破"; verdict["color"] = "green"
         return verdict
 
     if len(peaks) >= 2 and len(troughs) >= 2:
@@ -850,13 +850,13 @@ def calculate_trend_logic(df, n=10, is_weekly=False):
             m_trough = (t_last - t_prev) / (x_t2 - x_t1)
 
             if p_last > p_prev and t_last > t_prev:
-                if m_trough > m_peak * 1.2: verdict["trend"] = "⚠️ 上升楔形"; verdict["color"] = "green"
-                else: verdict["trend"] = "🔴 多頭趨勢"; verdict["color"] = "red"
+                if m_trough > m_peak * 1.2: verdict["trend"] = "上升楔形"; verdict["color"] = "green"
+                else: verdict["trend"] = "多頭趨勢"; verdict["color"] = "red"
             elif p_last < p_prev and t_last < t_prev:
-                if m_peak < m_trough * 1.2: verdict["trend"] = "✨ 下降楔形"; verdict["color"] = "red"
-                else: verdict["trend"] = "🟢 空頭趨勢"; verdict["color"] = "green"
-            elif p_last < p_prev and t_last > t_prev: verdict["trend"] = "📐 收斂整理"; verdict["color"] = "orange"
-            elif p_last > p_prev and t_last < t_prev: verdict["trend"] = "🎺 擴散型態"; verdict["color"] = "orange"
+                if m_peak < m_trough * 1.2: verdict["trend"] = "下降楔形"; verdict["color"] = "red"
+                else: verdict["trend"] = "空頭趨勢"; verdict["color"] = "green"
+            elif p_last < p_prev and t_last > t_prev: verdict["trend"] = "收斂整理"; verdict["color"] = "orange"
+            elif p_last > p_prev and t_last < t_prev: verdict["trend"] = "擴散型態"; verdict["color"] = "orange"
 
     return verdict
 
@@ -1121,15 +1121,35 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
         if st.session_state.chart_settings.get('candle_patterns', True) and candle_patterns:
             for p in candle_patterns:
                 date = p['date']
-                y_val = df.loc[date, 'High'] * 1.02 if p['type'] == 'Bearish' else df.loc[date, 'Low'] * 0.98
+                is_bearish = p['type'] == 'Bearish'
+                y_val = df.loc[date, 'High'] * 1.02 if is_bearish else df.loc[date, 'Low'] * 0.98
                 # Font color matches TW standard (Red for Bullish, Green for Bearish)
-                fig.add_annotation(
-                    x=date, y=y_val,
-                    text=p['name'],
-                    showarrow=False,
-                    font=dict(color="green" if p['type'] == 'Bearish' else "red", size=10),
-                    row=1, col=1
-                )
+                font_color = "green" if is_bearish else "red"
+                clean_name = p['name']
+
+                if len(p.get('points', [])) > 1:
+                    # Continuous pattern: use large quotation marks
+                    fig.add_annotation(
+                        x=date, y=y_val,
+                        text=f"「{clean_name}」",
+                        showarrow=False,
+                        font=dict(color=font_color, size=12, weight="bold"),
+                        row=1, col=1
+                    )
+                else:
+                    # Single point pattern (Hammer, etc.): use arrow
+                    fig.add_annotation(
+                        x=date, y=y_val,
+                        text=clean_name,
+                        showarrow=True,
+                        arrowhead=2,
+                        arrowsize=1,
+                        arrowwidth=1.5,
+                        arrowcolor=font_color,
+                        ax=0, ay=-30 if is_bearish else 30,
+                        font=dict(color=font_color, size=12, weight="bold"),
+                        row=1, col=1
+                    )
 
         # Volume
         colors = ['#ef4444' if row['Close'] >= row['Open'] else '#22c55e' for index, row in df.iterrows()]
