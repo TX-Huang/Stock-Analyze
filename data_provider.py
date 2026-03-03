@@ -192,9 +192,25 @@ def safe_finlab_sim(position, **kwargs):
     import os
 
     # 源頭防護：確保 position 本身沒問題
-    if isinstance(position.columns, pd.CategoricalIndex):
-        logging.info("偵測到 position.columns 為 CategoricalIndex，強制轉換為 string Index")
-        position.columns = position.columns.astype(str)
+    # [FIX for 1-day hold bug] Do NOT convert position.columns to string if we can avoid it.
+    # If we convert it to string, FinLab's internal `backtest.sim` alignment with `data.get('price:收盤價')` (which is Categorical)
+    # will fail completely, resulting in immediate liquidation of all positions on the next day!
+    # Instead, we force `position.columns` to be the EXACT same CategoricalIndex object as `price:收盤價`.
+    try:
+        raw_close = data.get('price:收盤價')
+        if len(position.columns) == len(raw_close.columns):
+            # Apply exactly identical CategoricalIndex to prevent Pandas `NotImplementedError`
+            position.columns = raw_close.columns
+            logging.info("成功對齊 position.columns 與 raw_close.columns (精確 CategoricalIndex 對接)。")
+        else:
+            # Fallback if somehow shapes differ
+            logging.warning("position 與 raw_close 欄位數量不一致，嘗試轉換為 string Index 作為最後手段。")
+            if isinstance(position.columns, pd.CategoricalIndex):
+                position.columns = position.columns.astype(str)
+    except Exception as e:
+        logging.warning(f"對齊 CategoricalIndex 時發生錯誤: {e}")
+        if isinstance(position.columns, pd.CategoricalIndex):
+            position.columns = position.columns.astype(str)
 
     # Pre-emptive Cache Healing (毒樹果實預防)
     # The crash happens because FinLab internally tries to load 'security_categories' during sim()

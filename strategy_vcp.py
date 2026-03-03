@@ -124,10 +124,6 @@ def run_vcp_strategy(api_token):
     from data_provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
-        if isinstance(position.columns, pd.CategoricalIndex):
-            logging.info("偵測到 CategoricalIndex，強制轉換為 string Index")
-            position.columns = position.columns.astype(str)
-
         report = safe_finlab_sim(position, resample='D', name='VCP 波動收縮策略', upload=False)
         return report
     except Exception as e:

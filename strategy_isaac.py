@@ -287,11 +287,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         logging.info(f"Categorical ordered: {final_pos.columns.ordered}")
 
     try:
-        # 強制對齊欄位為標準字串，防止 Pandas 版本在 merge/concat 時發生的 CategoricalDtype 錯誤
-        if isinstance(final_pos.columns, pd.CategoricalIndex):
-            logging.info("偵測到 CategoricalIndex，強制轉換為 string Index 以避免衝突")
-            final_pos.columns = final_pos.columns.astype(str)
-
         # 執行回測 (改用安全封裝版本)
         from data_provider import safe_finlab_sim
         if stop_loss is not None or take_profit is not None:

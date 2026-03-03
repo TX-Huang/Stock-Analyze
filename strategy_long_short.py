@@ -101,10 +101,6 @@ def run_long_short_strategy(api_token):
     from data_provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
-        if isinstance(final_pos.columns, pd.CategoricalIndex):
-            logging.info("偵測到 CategoricalIndex，強制轉換為 string Index")
-            final_pos.columns = final_pos.columns.astype(str)
-
         report = safe_finlab_sim(final_pos, resample='D', name='多空策略', upload=False)
         return report
     except Exception as e:
