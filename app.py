@@ -23,7 +23,7 @@ from data_provider import get_data_provider
 
 # --- Config ---
 st.set_page_config(page_title="Alpha Global v93.0", layout="wide", page_icon="📈")
-GEMINI_MODEL = 'gemini-3-pro-preview' # 鎖定最穩定模型
+GEMINI_MODEL = 'gemini-2.0-flash' # 鎖定最穩定模型
 
 # Fix Pandas Styler Limit
 pd.set_option("styler.render.max_elements", 1_000_000)
@@ -1119,18 +1119,29 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
 
         # Candle Patterns Annotations
         if st.session_state.chart_settings.get('candle_patterns', True) and candle_patterns:
+            annotation_counts = {}
             for p in candle_patterns:
                 date = p['date']
                 is_bearish = p['type'] == 'Bearish'
+
+                # For multiple annotations on same side, shift them
+                key = (date, is_bearish)
+                count = annotation_counts.get(key, 0)
+                annotation_counts[key] = count + 1
+
                 y_val = df.loc[date, 'High'] * 1.02 if is_bearish else df.loc[date, 'Low'] * 0.98
-                # Font color matches TW standard (Red for Bullish, Green for Bearish)
+
+                # Font color matches TW standard (Red for Bullish/利多, Green for Bearish/利空)
                 font_color = "green" if is_bearish else "red"
                 clean_name = p['name']
 
                 if len(p.get('points', [])) > 1:
                     # Continuous pattern: use large quotation marks
+                    offset_y = (count * 20) if not is_bearish else (-count * 20)
+
                     fig.add_annotation(
                         x=date, y=y_val,
+                        yshift=offset_y,
                         text=f"「{clean_name}」",
                         showarrow=False,
                         font=dict(color=font_color, size=12, weight="bold"),
@@ -1138,6 +1149,8 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                     )
                 else:
                     # Single point pattern (Hammer, etc.): use arrow
+                    ay_val = (-30 - count*25) if is_bearish else (30 + count*25)
+
                     fig.add_annotation(
                         x=date, y=y_val,
                         text=clean_name,
@@ -1146,7 +1159,7 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
                         arrowsize=1,
                         arrowwidth=1.5,
                         arrowcolor=font_color,
-                        ax=0, ay=-30 if is_bearish else 30,
+                        ax=0, ay=ay_val,
                         font=dict(color=font_color, size=12, weight="bold"),
                         row=1, col=1
                     )
@@ -1154,6 +1167,26 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
         # Volume
         colors = ['#ef4444' if row['Close'] >= row['Open'] else '#22c55e' for index, row in df.iterrows()]
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=2, col=1)
+
+        # Initial View Range (2 Months) & Max Range Limit
+        view_len = min(60, len(df))
+        start_date = df.index[-view_len]
+        end_date = df.index[-1]
+
+        # In Plotly, to set initial range and restrict max zoom out, we update the x-axis
+        fig.update_xaxes(
+            range=[start_date, end_date],
+            minallowed=df.index[0],
+            maxallowed=df.index[-1],
+            row=1, col=1
+        )
+        # Apply to volume chart as well
+        fig.update_xaxes(
+            range=[start_date, end_date],
+            minallowed=df.index[0],
+            maxallowed=df.index[-1],
+            row=2, col=1
+        )
 
         fig.update_layout(height=height, margin=dict(l=10, r=10, t=40, b=10), xaxis_rangeslider_visible=False, showlegend=True)
         st.plotly_chart(fig, use_container_width=True)
