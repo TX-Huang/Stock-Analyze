@@ -383,7 +383,8 @@ def render_backtest_dashboard(report):
                 color = ''
                 if pd.isna(val): return ''
                 if isinstance(val, (int, float)):
-                    color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
+                    # In TW, Red (#ef4444) is positive, Green (#22c55e) is negative
+                    color = 'color: #ef4444' if val > 0 else 'color: #22c55e'
                 return color
 
             st.dataframe(
@@ -453,6 +454,26 @@ def resolve_ticker_and_market(query):
     query = str(query).strip()
     if re.match(r'^\d{4,6}$', query): return query, "🇹🇼 台股 (TW)", query
     if re.match(r'^[A-Z]{1,5}$', query.upper()): return query.upper(), "🗽 美股 (US)", query.upper()
+
+    # 先嘗試使用開源台股 API 搜尋中文名稱 (TWSE / TPEx)
+    import requests
+    try:
+        res_twse = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=3)
+        if res_twse.status_code == 200:
+            data = res_twse.json()
+            for item in data:
+                if query in item.get('Name', '') or query == item.get('Code', ''):
+                    return item['Code'], "🇹🇼 台股 (TW)", item['Name']
+    except Exception: pass
+
+    try:
+        res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes", timeout=3)
+        if res_tpex.status_code == 200:
+            data = res_tpex.json()
+            for item in data:
+                if query in item.get('CompanyName', '') or query == item.get('SecuritiesCompanyCode', ''):
+                    return item['SecuritiesCompanyCode'], "🇹🇼 台股 (TW)", item['CompanyName']
+    except Exception: pass
 
     if not client: return None, None, None
     prompt = f"將'{query}'轉為股票代碼。回傳JSON:{{'market':'TW'或'US', 'ticker':'代碼', 'name':'中文名'}}。台股代碼僅數字。"
@@ -537,6 +558,7 @@ def detect_candlestick_patterns(df):
     # 10-day local extremes
     df['LocalHigh'] = df['High'].rolling(10).max()
     df['LocalLow'] = df['Low'].rolling(10).min()
+    df['MA5'] = df['Close'].rolling(5).mean()
 
     # Position: (Close - LocalLow) / (LocalHigh - LocalLow)
     # IsDowntrend = Position <= 0.25 (Bottom 25%)
@@ -638,7 +660,12 @@ def detect_candlestick_patterns(df):
                     if is_downtrend:
                         patterns.append({"name": "倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
                     elif is_uptrend:
-                        patterns.append({"name": "流星", "date": idx2, "type": "Bearish", "points": [idx2]})
+                        # User request: "對於持續上升的K線，途中的流星應該算倒槌子"
+                        # If price is above MA5 in an uptrend, it's a strong continuous uptrend -> Inverted Hammer (Bullish continuation)
+                        if row2['Close'] >= df.loc[idx2, 'MA5']:
+                            patterns.append({"name": "倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
+                        else:
+                            patterns.append({"name": "流星", "date": idx2, "type": "Bearish", "points": [idx2]})
 
     return patterns
 
@@ -649,6 +676,7 @@ def detect_candlestick_patterns(df):
     # 10-day local extremes for trend detection
     df['LocalHigh'] = df['High'].rolling(10).max()
     df['LocalLow'] = df['Low'].rolling(10).min()
+    df['MA5'] = df['Close'].rolling(5).mean()
 
     # Helper functions
     def is_bullish(row): return row['Close'] > row['Open']
@@ -774,7 +802,10 @@ def detect_candlestick_patterns(df):
                     if at_support(row2):
                         patterns.append({"name": "倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
                     elif at_resistance(row2):
-                        patterns.append({"name": "流星", "date": idx2, "type": "Bearish", "points": [idx2]})
+                        if row2['Close'] >= df.loc[idx2, 'MA5']:
+                            patterns.append({"name": "倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
+                        else:
+                            patterns.append({"name": "流星", "date": idx2, "type": "Bearish", "points": [idx2]})
 
     return patterns
 
@@ -1484,7 +1515,8 @@ if app_mode == "🧬 量化回測系統":
                     color = ''
                     if pd.isna(val): return ''
                     if isinstance(val, (int, float)):
-                        color = 'color: #22c55e' if val > 0 else 'color: #ef4444'
+                        # In TW, Red (#ef4444) is positive, Green (#22c55e) is negative
+                        color = 'color: #ef4444' if val > 0 else 'color: #22c55e'
                     return color
 
                 st.dataframe(
@@ -1568,15 +1600,17 @@ elif app_mode == "📈 股市戰情室":
             st.session_state.supply_chain_data = None
             st.session_state.detected_themes = []
             with st.spinner(f"正在鎖定目標 {single_input}..."):
-                if not api_key:
+                # Always attempt to resolve ticker (which now includes free TWSE/TPEx fallback)
+                target_ticker, detected_market, target_name = resolve_ticker_and_market(single_input)
+
+                # If resolution failed and we lack an API key for the Gemini final fallback
+                if not target_ticker and not api_key:
                     if re.match(r'^\d{4,6}$', single_input):
                         target_ticker = single_input; detected_market = "🇹🇼 台股 (TW)"; target_name = single_input
                     elif re.match(r'^[A-Z]{1,5}$', single_input.upper()):
                         target_ticker = single_input.upper(); detected_market = "🗽 美股 (US)"; target_name = single_input.upper()
                     else:
-                        st.error("⚠️ 請輸入 Gemini API Key 以啟用中文搜尋。或直接輸入代碼 (如 2330)。"); target_ticker=None
-                else:
-                    target_ticker, detected_market, target_name = resolve_ticker_and_market(single_input)
+                        st.error("⚠️ 無法識別股票名稱。建議輸入代碼 (如 2330) 或輸入 Gemini API Key 以啟用完整 AI 搜尋功能。")
 
                 if target_ticker and detected_market:
                     st.success(f"已識別: {target_name} ({target_ticker})")
@@ -1650,10 +1684,12 @@ elif app_mode == "📈 股市戰情室":
 
         # [Native UI Fix]: Use Streamlit's native info/success/error box
         trend_val = verdict.get('trend', '')
+        # In TW, Bullish (多/上升) is Red. We can use st.error to get a red box (overriding icon).
+        # Bearish (空/下降) is Green. We can use st.success.
         if '多' in trend_val or '上升' in trend_val:
-            status_box = st.success
-        elif '空' in trend_val or '下降' in trend_val:
             status_box = st.error
+        elif '空' in trend_val or '下降' in trend_val:
+            status_box = st.success
         else:
             status_box = st.warning
 
@@ -1728,8 +1764,9 @@ elif app_mode == "📈 股市戰情室":
                     verdict = row.get('verdict', {})
                     # Native UI for List View
                     trend_val = row['趨勢']
-                    if '多' in trend_val or '上升' in trend_val: color = "green"
-                    elif '空' in trend_val or '下降' in trend_val: color = "red"
+                    # In TW, Bullish is Red, Bearish is Green
+                    if '多' in trend_val or '上升' in trend_val: color = "red"
+                    elif '空' in trend_val or '下降' in trend_val: color = "green"
                     else: color = "gray"
 
                     st.markdown(f":{color}-background[**⚖️ {trend_val}**] | {row.get('signal_context', '')}")
