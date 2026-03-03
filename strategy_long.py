@@ -100,14 +100,15 @@ def run_long_strategy(api_token):
     # Run Backtest
     import logging
     import os
+    from data_provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
         if isinstance(position.columns, pd.CategoricalIndex):
             logging.info("偵測到 CategoricalIndex，強制轉換為 string Index")
             position.columns = position.columns.astype(str)
 
-        report = backtest.sim(position, resample='D', name='純做多策略', upload=False)
+        report = safe_finlab_sim(position, resample='D', name='純做多策略', upload=False)
         return report
     except Exception as e:
-        logging.error(f"backtest.sim 崩潰: {str(e)}", exc_info=True)
+        logging.error(f"策略層級崩潰: {str(e)}", exc_info=True)
         raise e

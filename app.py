@@ -525,20 +525,122 @@ def generate_ai_analysis(market, ticker, name, price, change, sector, technicals
 # 4. Logic Engines
 # ==========================================
 def detect_candlestick_patterns(df):
-    """
-    User requests:
-    - 晨星 (Morning Star) / 暮星 (Evening Star)
-    - 紅三兵 (Three White Soldiers) / 黑三鴉 (Three Black Crows)
-    - 吞噬 (Engulfing) / 烏雲罩頂 (Dark Cloud Cover) / 貫穿線 (Piercing Pattern)
-    - 孕線 (Harami)
-    - 實體K線 (Marubozu) / 十字星 (Doji)
-    - 錘子/吊人 (Hammer / Hanging Man) / 倒錘/流星 (Inverted Hammer / Shooting Star)
-
-    14-day average baselines, 10-day local extremes, priority scanning.
-    """
     patterns = []
-    if len(df) < 15:
-        return patterns
+    if len(df) < 20: return patterns
+
+    # Strict definitions per user request
+    df['Range'] = df['High'] - df['Low']
+    df['Body'] = abs(df['Close'] - df['Open'])
+    df['AvgRange'] = df['Range'].rolling(14).mean()
+    df['AvgBody'] = df['Body'].rolling(14).mean()
+
+    # 10-day local extremes
+    df['LocalHigh'] = df['High'].rolling(10).max()
+    df['LocalLow'] = df['Low'].rolling(10).min()
+
+    # Position: (Close - LocalLow) / (LocalHigh - LocalLow)
+    # IsDowntrend = Position <= 0.25 (Bottom 25%)
+    # IsUptrend = Position >= 0.75 (Top 25%)
+    df['Position'] = (df['Close'] - df['LocalLow']) / (df['LocalHigh'] - df['LocalLow'] + 1e-9)
+
+    # Scan the entire history
+    scan_df = df.tail(60)
+    if len(scan_df) < 3: return patterns
+
+    for i in range(2, len(scan_df)):
+        idx0 = scan_df.index[i-2]
+        idx1 = scan_df.index[i-1]
+        idx2 = scan_df.index[i]
+
+        row0 = scan_df.loc[idx0]
+        row1 = scan_df.loc[idx1]
+        row2 = scan_df.loc[idx2]
+
+        # Flat Market Filter
+        if row2['Range'] < row2['AvgRange'] * 0.2:
+            continue
+
+        found = False
+
+        # Helpers
+        is_downtrend = row1['Position'] <= 0.25
+        is_uptrend = row1['Position'] >= 0.75
+
+        def is_bullish(row): return row['Close'] > row['Open']
+        def is_bearish(row): return row['Close'] < row['Open']
+        def upper_shadow(row): return row['High'] - max(row['Open'], row['Close'])
+        def lower_shadow(row): return min(row['Open'], row['Close']) - row['Low']
+
+        # Priority 1: Multi-Candle
+        if is_bearish(row0) and row0['Body'] > row0['AvgBody'] and \
+           is_bullish(row2) and row2['Body'] > row2['AvgBody'] and \
+           row2['Close'] > (row0['Open'] + row0['Close']) / 2 and \
+           row1['Body'] <= row1['AvgBody'] * 0.5 and \
+           max(row1['Open'], row1['Close']) < row0['Close'] and is_downtrend:
+            patterns.append({"name": "🌅 晨星 (Morning Star)", "date": idx2, "type": "Bullish", "points": [idx0, idx1, idx2]})
+            found = True
+
+        elif is_bullish(row0) and row0['Body'] > row0['AvgBody'] and \
+             is_bearish(row2) and row2['Body'] > row2['AvgBody'] and \
+             row2['Close'] < (row0['Open'] + row0['Close']) / 2 and \
+             row1['Body'] <= row1['AvgBody'] * 0.5 and \
+             min(row1['Open'], row1['Close']) > row0['Close'] and is_uptrend:
+            patterns.append({"name": "🌃 暮星 (Evening Star)", "date": idx2, "type": "Bearish", "points": [idx0, idx1, idx2]})
+            found = True
+
+        # Priority 2: Two-Candle
+        if not found:
+            if is_bearish(row1) and is_bullish(row2) and \
+               row2['Open'] < row1['Close'] and row2['Close'] > row1['Open'] and is_downtrend:
+                patterns.append({"name": "🟢 多頭吞噬", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bullish(row1) and is_bearish(row2) and \
+                 row2['Open'] > row1['Close'] and row2['Close'] < row1['Open'] and is_uptrend:
+                patterns.append({"name": "🔴 空頭吞噬", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bullish(row1) and row1['Body'] > row1['AvgBody'] and \
+                 is_bearish(row2) and row2['Body'] > row2['AvgBody'] and \
+                 row2['Open'] > row1['High'] and \
+                 row2['Close'] < (row1['Open'] + row1['Close']) / 2 and \
+                 row2['Close'] > row1['Open'] and is_uptrend:
+                patterns.append({"name": "🌧️ 烏雲罩頂", "date": idx2, "type": "Bearish", "points": [idx1, idx2]})
+                found = True
+
+            elif is_bearish(row1) and row1['Body'] > row1['AvgBody'] and \
+                 is_bullish(row2) and row2['Body'] > row2['AvgBody'] and \
+                 row2['Open'] < row1['Low'] and \
+                 row2['Close'] > (row1['Open'] + row1['Close']) / 2 and \
+                 row2['Close'] < row1['Open'] and is_downtrend:
+                patterns.append({"name": "🗡️ 貫穿線", "date": idx2, "type": "Bullish", "points": [idx1, idx2]})
+                found = True
+
+        # Priority 3: Single-Candle
+        if not found:
+            is_marubozu = row2['Body'] >= row2['AvgBody'] * 1.5 and upper_shadow(row2) < row2['AvgBody'] * 0.1 and lower_shadow(row2) < row2['AvgBody'] * 0.1
+            is_doji = row2['Body'] <= row2['AvgBody'] * 0.1
+
+            if is_marubozu and (is_downtrend or is_uptrend):
+                if is_bullish(row2):
+                    patterns.append({"name": "🟩 大長紅", "date": idx2, "type": "Bullish", "points": [idx2]})
+                else:
+                    patterns.append({"name": "🟥 大長黑", "date": idx2, "type": "Bearish", "points": [idx2]})
+            elif is_doji and (is_downtrend or is_uptrend):
+                patterns.append({"name": "➕ 十字星", "date": idx2, "type": "Neutral", "points": [idx2]})
+            else:
+                if lower_shadow(row2) >= 2 * row2['Body'] and upper_shadow(row2) <= row2['Body'] * 0.2:
+                    if is_downtrend:
+                        patterns.append({"name": "🔨 錘子", "date": idx2, "type": "Bullish", "points": [idx2]})
+                    elif is_uptrend:
+                        patterns.append({"name": "🪝 吊人", "date": idx2, "type": "Bearish", "points": [idx2]})
+                elif upper_shadow(row2) >= 2 * row2['Body'] and lower_shadow(row2) <= row2['Body'] * 0.2:
+                    if is_downtrend:
+                        patterns.append({"name": "🏹 倒錘", "date": idx2, "type": "Bullish", "points": [idx2]})
+                    elif is_uptrend:
+                        patterns.append({"name": "🌠 流星", "date": idx2, "type": "Bearish", "points": [idx2]})
+
+    return patterns
 
     # Define baseline metrics
     df['Body'] = abs(df['Close'] - df['Open'])

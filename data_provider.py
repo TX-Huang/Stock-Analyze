@@ -180,3 +180,52 @@ def get_data_provider(source_name: str, market_type: str = "TW", **kwargs) -> Ba
     else:
         # Default fallback is YFinance
         return YFinanceProvider(market_type=market_type)
+
+def safe_finlab_sim(position, **kwargs):
+    """
+    防禦性封裝 finlab.backtest.sim。
+    """
+    import logging
+    import pandas as pd
+    from finlab import backtest, data
+    import shutil
+    import os
+
+    # 源頭防護：確保 position 本身沒問題
+    if isinstance(position.columns, pd.CategoricalIndex):
+        logging.info("偵測到 position.columns 為 CategoricalIndex，強制轉換為 string Index")
+        position.columns = position.columns.astype(str)
+
+    # Pre-emptive Cache Healing (毒樹果實預防)
+    # The crash happens because FinLab internally tries to load 'security_categories' during sim()
+    try:
+        logging.info("執行前置快取健康檢查 (Pre-flight Cache Check)...")
+        # 故意觸發讀取
+        _ = data.get('security_categories')
+    except Exception as check_e:
+        # 只要有一點點問題，就認定快取中毒
+        logging.warning(f"快取健康檢查失敗，偵測到版本衝突 ({type(check_e).__name__}): {check_e}")
+        logging.info("啟動強制快取淨化流程...")
+        home_finlab = os.path.expanduser("~/.finlab")
+        if os.path.exists(home_finlab):
+            try:
+                shutil.rmtree(home_finlab)
+                logging.info("物理刪除 ~/.finlab 成功！")
+            except Exception as del_e:
+                logging.error(f"物理刪除 ~/.finlab 失敗: {del_e}")
+
+        # 強制重新下載
+        try:
+            data.get('security_categories', force_download=True)
+            logging.info("強制重新下載 security_categories 成功！")
+        except Exception as dl_e:
+            logging.error(f"強制重新下載失敗: {dl_e}")
+
+    try:
+        logging.info("開始執行 backtest.sim")
+        report = backtest.sim(position, **kwargs)
+        return report
+
+    except Exception as e:
+        logging.error(f"backtest.sim 發生未預期錯誤: {e}", exc_info=True)
+        raise e

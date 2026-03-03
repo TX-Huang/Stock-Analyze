@@ -292,9 +292,10 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
             logging.info("偵測到 CategoricalIndex，強制轉換為 string Index 以避免衝突")
             final_pos.columns = final_pos.columns.astype(str)
 
-        # 執行回測
+        # 執行回測 (改用安全封裝版本)
+        from data_provider import safe_finlab_sim
         if stop_loss is not None or take_profit is not None:
-            report = backtest.sim(
+            report = safe_finlab_sim(
                 final_pos,
                 resample='D',
                 name='Isaac 策略 (壓力測試)',
@@ -303,11 +304,11 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
                 take_profit=take_profit
             )
         else:
-            report = backtest.sim(final_pos, resample='D', name='Isaac 策略 (全天候)', upload=False)
+            report = safe_finlab_sim(final_pos, resample='D', name='Isaac 策略 (全天候)', upload=False)
 
         logging.info("backtest.sim 執行成功")
         return report
 
     except Exception as e:
-        logging.error(f"backtest.sim 崩潰: {str(e)}", exc_info=True)
+        logging.error(f"策略層級崩潰: {str(e)}", exc_info=True)
         raise e
