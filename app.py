@@ -334,9 +334,24 @@ def render_backtest_dashboard(report):
     with tab3:
         st.subheader("📋 詳細交易紀錄")
         if not trades.empty:
+            # === Dictionary for column translation ===
+            rename_map = {
+                "stock_id": "股票代碼",
+                "entry_date": "進場日期",
+                "exit_date": "出場日期",
+                "entry_price": "進場價",
+                "exit_price": "出場價",
+                "return": "報酬率",
+                "mae": "最大不利(MAE)",
+                "mfe": "最大有利(MFE)",
+                "period": "持有天數"
+            }
+
             trades_display = trades.copy()
-            if 'entry_date' in trades_display.columns:
-                trades_display['entry_date'] = pd.to_datetime(trades_display['entry_date'])
+            trades_display.rename(columns=rename_map, inplace=True)
+
+            if '進場日期' in trades_display.columns:
+                trades_display['進場日期'] = pd.to_datetime(trades_display['進場日期'])
 
             # Use all trades as filtered trades since no filter is applied here yet
             trades_filtered = trades_display
