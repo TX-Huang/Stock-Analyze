@@ -5,7 +5,7 @@ import numpy as np
 import finlab
 
 def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
-    from data_provider import sanitize_dataframe
+    from data.provider import sanitize_dataframe
 
     if api_token:
         finlab.login(api_token)
@@ -368,7 +368,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         logging.info(f"  {cond_name}: {cond_count}")
 
     try:
-        from data_provider import safe_finlab_sim
+        from data.provider import safe_finlab_sim
 
         sim_kwargs = {
             'resample': 'D',

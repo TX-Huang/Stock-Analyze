@@ -5,7 +5,7 @@ import numpy as np
 import finlab
 
 def run_long_short_strategy(api_token):
-    from data_provider import sanitize_dataframe
+    from data.provider import sanitize_dataframe
     if api_token:
         finlab.login(api_token)
 

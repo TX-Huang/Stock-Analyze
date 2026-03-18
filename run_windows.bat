@@ -17,7 +17,7 @@ if exist "python_embed\python.exe" (
     :: We use a helper script to fix this automatically.
 
     echo [INFO] Patching embedded python configuration...
-    "%TARGET_PY%" fix_embed_pth.py
+    "%TARGET_PY%" utils\fix_embed_pth.py
 
     :: Ensure pip is installed. Embedded python doesn't come with pip by default.
     :: We download get-pip.py if not present.
