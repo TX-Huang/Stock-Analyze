@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+finlab>=0.3.11
+plotly
+yfinance
+scipy
+google-genai
+graphviz
+requests

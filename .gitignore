@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Environment
+.env
+.streamlit/secrets.toml
+
+# Embedded Python & pip installer
+python_embed/
+get-pip.py
+
+# Data / Cache
+new_vip_db/
+.finlab/
+
+# IDE
+.vscode/
+.idea/
+
+# Output
+output/
+logs/
