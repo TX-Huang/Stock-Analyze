@@ -78,9 +78,10 @@ def run_will_vcp_strategy(api_token, params=None):
 
     # =========================================================
     # 2. Basic Cleanup — 對齊欄位與時間區間
+    #    注意：不要直接覆寫 FinlabDataFrame 的 index，會破壞內部機制
+    #    價量資料 index 已是 DatetimeIndex，只需確保 columns 為 str
     # =========================================================
     for df in [close, high, low, vol, open_]:
-        df.index = pd.to_datetime(df.index)
         df.columns = df.columns.astype(str)
 
     close, high, low, vol, open_ = [
