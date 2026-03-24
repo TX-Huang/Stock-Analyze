@@ -42,6 +42,7 @@ def _get_price_ttl():
 def _fetch_prices_batch(tickers_tuple):
     from data.provider import get_data_provider, SinoPacProvider
     prices = {}
+    source_label = "YFinance"
     try:
         sinopac = SinoPacProvider()
         snapshots = sinopac.get_snapshots(list(tickers_tuple))
@@ -52,7 +53,8 @@ def _fetch_prices_batch(tickers_tuple):
                 if code and close > 0:
                     prices[code] = float(close)
             if len(prices) >= len(tickers_tuple) * 0.5:
-                return prices
+                source_label = "SinoPac"
+                return prices, source_label
     except Exception:
         pass
     try:
@@ -68,7 +70,7 @@ def _fetch_prices_batch(tickers_tuple):
                 pass
     except Exception:
         pass
-    return prices
+    return prices, source_label
 
 
 def _refresh_live_prices(positions):
@@ -77,6 +79,7 @@ def _refresh_live_prices(positions):
         return
     cache_key = '_dash_price_cache'
     cache_ts_key = '_dash_price_ts'
+    cache_src_key = '_dash_price_source'
     ttl = _get_price_ttl()
     now = datetime.now(TW_TZ).timestamp()
     cached = st.session_state.get(cache_key)
@@ -84,10 +87,11 @@ def _refresh_live_prices(positions):
     if cached and (now - cached_ts) < ttl and set(tickers).issubset(set(cached.keys())):
         prices = cached
     else:
-        prices = _fetch_prices_batch(tickers)
+        prices, source_label = _fetch_prices_batch(tickers)
         if prices:
             st.session_state[cache_key] = prices
             st.session_state[cache_ts_key] = now
+            st.session_state[cache_src_key] = source_label
     if not prices:
         return
     for p in positions:
@@ -223,6 +227,14 @@ def render():
             {'label': '未平倉部位', 'value': str(paper['n_positions']), 'accent': '#3b82f6'},
             {'label': '今日信號', 'value': str(n_signals), 'accent': '#f59e0b'},
         ])
+
+        source_label = st.session_state.get('_dash_price_source', 'N/A')
+        src_color = '#22c55e' if source_label == 'SinoPac' else '#f59e0b' if source_label == 'YFinance' else '#64748b'
+        st.markdown(
+            f'<div style="font-size:0.6rem;color:#64748b;text-align:right;font-family:JetBrains Mono,monospace">'
+            f'報價來源: <span style="color:{src_color}">{source_label}</span></div>',
+            unsafe_allow_html=True,
+        )
 
         st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 

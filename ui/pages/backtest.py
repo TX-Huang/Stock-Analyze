@@ -11,7 +11,7 @@ import os
 import logging
 
 from ui.theme import _plotly_dark_layout
-from ui.components import cyber_spinner
+from ui.components import cyber_spinner, cyber_kpi_strip, cyber_table
 
 
 def render(_embedded=False):
@@ -227,9 +227,9 @@ def render(_embedded=False):
         has_comparison = len(st.session_state.backtest_results) >= 2
 
         if has_comparison:
-            tab1, tab_cmp, tab2, tab3, tab_mc = st.tabs(["📊 核心績效", "⚔️ 策略比較", "🛡️ 壓力測試", "📋 交易明細", "🎲 統計驗證"])
+            tab1, tab_cmp, tab2, tab3, tab_cost, tab_mc = st.tabs(["📊 核心績效", "⚔️ 策略比較", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "🎲 統計驗證"])
         else:
-            tab1, tab2, tab3, tab_mc = st.tabs(["📊 核心績效", "🛡️ 壓力測試", "📋 交易明細", "🎲 統計驗證"])
+            tab1, tab2, tab3, tab_cost, tab_mc = st.tabs(["📊 核心績效", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "🎲 統計驗證"])
 
         # ------ TAB: Core Performance ------
         with tab1:
@@ -463,6 +463,63 @@ def render(_embedded=False):
                 )
             else:
                 st.info("無交易紀錄")
+
+        # ------ TAB: Trading Cost ------
+        with tab_cost:
+            try:
+                from analysis.cost_analysis import analyze_trading_costs, render_cost_chart, render_cost_over_time
+
+                cost_data = analyze_trading_costs(trades)
+
+                # KPI strip
+                cyber_kpi_strip([
+                    {'label': '總交易數', 'value': f"{cost_data['total_trades']}", 'accent': '#3b82f6'},
+                    {'label': '總成本 (NTD)', 'value': f"NT${cost_data['total_cost']:,.0f}", 'accent': '#ef4444', 'color': '#ef4444'},
+                    {'label': '平均成本/筆 (%)', 'value': f"{cost_data['avg_cost_per_trade_pct']:.3f}%", 'accent': '#f59e0b'},
+                    {'label': '年化成本拖累', 'value': f"{cost_data['cost_drag_annualized']:.3f}%", 'accent': '#a855f7', 'color': '#a855f7'},
+                    {'label': '成本/毛利比', 'value': f"{cost_data['cost_ratio']:.2%}", 'accent': '#ec4899'},
+                ])
+
+                # Cost breakdown pie chart
+                st.markdown('<p class="sec-header">成本結構分析</p>', unsafe_allow_html=True)
+                fig_pie = render_cost_chart(cost_data)
+                if fig_pie:
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.info("無成本資料可顯示")
+
+                # Cumulative cost over time chart
+                st.markdown('<p class="sec-header">累計成本趨勢</p>', unsafe_allow_html=True)
+                fig_cum = render_cost_over_time(cost_data)
+                if fig_cum:
+                    st.plotly_chart(fig_cum, use_container_width=True)
+                else:
+                    st.info("無交易資料可繪製趨勢圖")
+
+                # Per-trade cost table (top 20 most expensive)
+                by_trade_list = cost_data.get('by_trade', [])
+                if by_trade_list:
+                    st.markdown('<p class="sec-header">單筆成本明細（前 20 高）</p>', unsafe_allow_html=True)
+                    sorted_trades = sorted(by_trade_list, key=lambda x: x['total_cost'], reverse=True)[:20]
+                    headers = ['代碼', '進場價', '出場價', '買入手續費', '賣出手續費', '證交稅', '滑價', '總成本', '成本比 (%)']
+                    rows = []
+                    for t in sorted_trades:
+                        rows.append([
+                            t.get('stock_id', 'N/A'),
+                            f"{t['entry_price']:,.2f}",
+                            f"{t['exit_price']:,.2f}",
+                            f"${t['commission_buy']:,.0f}",
+                            f"${t['commission_sell']:,.0f}",
+                            f"${t['tax']:,.0f}",
+                            f"${t['slippage']:,.0f}",
+                            f"<strong style='color:#ef4444'>${t['total_cost']:,.0f}</strong>",
+                            f"{t['cost_pct']*100:.3f}%",
+                        ])
+                    cyber_table(headers, rows)
+
+            except Exception as e:
+                st.error(f"交易成本分析失敗: {e}")
+                import traceback; logging.error(traceback.format_exc())
 
         # ------ TAB: Monte Carlo Statistical Validation ------
         with tab_mc:

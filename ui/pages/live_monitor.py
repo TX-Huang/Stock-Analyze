@@ -36,29 +36,317 @@ def render(_embedded=False):
 def _render_risk_control():
     """風控中心 tab content — 完整風險監控。"""
     from data.risk_monitor import RiskMonitor
+    from data.paper_trader import PaperTrader
+    from data.provider import get_data_provider
     from config.paths import PAPER_TRADE_PATH
+    from ui.components import cyber_kpi_strip, cyber_table, cyber_spinner
+
     monitor = RiskMonitor()
     risk_path = PAPER_TRADE_PATH
-    if os.path.exists(risk_path):
+    if not os.path.exists(risk_path):
+        st.markdown(
+            '<div class="alert-card alert-info">'
+            '<div class="alert-title">無投資組合資料</div>'
+            '<div class="alert-body">請先在模擬交易頁面初始化帳戶。</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── 1. Current Alerts ──
+    try:
         result = monitor.check_all()
         alerts = result.get('alerts', [])
-        pr = result.get('portfolio_risk', {})
-        mr = result.get('market_risk', {}).get('etf_0050', {})
-        positions_risk = result.get('positions_risk', [])
-        n_danger = result.get('n_danger', 0); n_warning = result.get('n_warning', 0)
+        n_danger = result.get('n_danger', 0)
+        n_warning = result.get('n_warning', 0)
         if n_danger > 0:
-            st.markdown(f'<div class="alert-card alert-danger"><div class="alert-title">危險：{n_danger} 個重大警報</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="alert-card alert-danger">'
+                f'<div class="alert-title">危險：{n_danger} 個重大警報</div></div>',
+                unsafe_allow_html=True,
+            )
         elif n_warning > 0:
-            st.markdown(f'<div class="alert-card alert-warn"><div class="alert-title">警告：{n_warning} 個警報</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="alert-card alert-warn">'
+                f'<div class="alert-title">警告：{n_warning} 個警報</div></div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.markdown('<div class="alert-card alert-ok"><div class="alert-title">狀態正常</div><div class="alert-body">未偵測到風險警報。</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="alert-card alert-ok">'
+                '<div class="alert-title">狀態正常</div>'
+                '<div class="alert-body">未偵測到風險警報。</div></div>',
+                unsafe_allow_html=True,
+            )
         for a in alerts:
             cls = 'alert-danger' if a['level'] == 'DANGER' else 'alert-warn'
-            st.markdown(f'<div class="alert-card {cls}"><div class="alert-title">[{a["level"]}] {a["type"].upper()}</div><div class="alert-body">{a["message"]}</div></div>', unsafe_allow_html=True)
-        if st.button("重新檢查風險", use_container_width=True, type="primary"):
-            st.rerun()
-    else:
-        st.markdown('<div class="alert-card alert-info"><div class="alert-title">無投資組合資料</div><div class="alert-body">請先在模擬交易頁面初始化帳戶。</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="alert-card {cls}">'
+                f'<div class="alert-title">[{a["level"]}] {a["type"].upper()}</div>'
+                f'<div class="alert-body">{a["message"]}</div></div>',
+                unsafe_allow_html=True,
+            )
+    except Exception as e:
+        st.warning(f"警報檢查失敗: {e}")
+
+    # Load positions & status
+    trader = PaperTrader()
+    positions = trader.get_positions()
+    status = trader.get_status()
+
+    # ── 2. Portfolio Risk KPI Strip ──
+    try:
+        equity = status.get('equity', 0)
+        initial = status.get('initial_capital', 1_000_000)
+        cash = status.get('cash', 0)
+        n_pos = status.get('n_positions', 0)
+        drawdown_pct = 0.0
+        equity_hist = trader.account.get('daily_equity', [])
+        if equity_hist:
+            peak = max(e.get('equity', 0) for e in equity_hist)
+            if peak > 0:
+                drawdown_pct = (equity - peak) / peak * 100
+
+        cash_ratio = (cash / equity * 100) if equity > 0 else 100.0
+
+        dd_color = '#22c55e' if drawdown_pct >= -5 else '#f59e0b' if drawdown_pct >= -15 else '#ef4444'
+        cash_color = '#22c55e' if cash_ratio >= 20 else '#f59e0b' if cash_ratio >= 10 else '#ef4444'
+
+        st.markdown('<p class="sec-header">投資組合風險概覽</p>', unsafe_allow_html=True)
+        cyber_kpi_strip([
+            {'label': '總權益', 'value': f'${equity:,.0f}', 'accent': '#3b82f6'},
+            {'label': '回撤', 'value': f'{drawdown_pct:+.2f}%', 'color': dd_color, 'accent': dd_color},
+            {'label': '現金比例', 'value': f'{cash_ratio:.1f}%', 'color': cash_color, 'accent': cash_color},
+            {'label': '持倉數', 'value': str(n_pos), 'accent': '#8b5cf6'},
+        ])
+    except Exception as e:
+        st.warning(f"KPI 載入失敗: {e}")
+
+    # ── 3. Industry Concentration Check ──
+    try:
+        if positions:
+            st.markdown('<p class="sec-header">產業集中度檢查</p>', unsafe_allow_html=True)
+            sector_map = {}
+            total_value = 0
+            for p in positions:
+                ticker = str(p.get('ticker', ''))
+                digits = ''.join(c for c in ticker if c.isdigit())
+                sector_code = digits[:2] if len(digits) >= 2 else '其他'
+                cur_price = p.get('current_price', p.get('entry_price', 0))
+                value = cur_price * p.get('shares', 0)
+                total_value += value
+                if sector_code not in sector_map:
+                    sector_map[sector_code] = {'value': 0, 'tickers': []}
+                sector_map[sector_code]['value'] += value
+                sector_map[sector_code]['tickers'].append(ticker)
+
+            sector_rows = []
+            warnings_found = False
+            for code in sorted(sector_map, key=lambda c: sector_map[c]['value'], reverse=True):
+                info = sector_map[code]
+                weight = (info['value'] / total_value * 100) if total_value > 0 else 0
+                tickers_str = ', '.join(info['tickers'][:5])
+                if len(info['tickers']) > 5:
+                    tickers_str += f' ... +{len(info["tickers"]) - 5}'
+                warn_html = ''
+                if weight > 30:
+                    warn_html = ' <span class="tag tag-danger">超標</span>'
+                    warnings_found = True
+                sector_rows.append([
+                    f'{code}xx',
+                    tickers_str,
+                    f'{len(info["tickers"])}',
+                    f'${info["value"]:,.0f}',
+                    f'{weight:.1f}%{warn_html}',
+                ])
+
+            cyber_table(
+                ['產業碼', '持股', '檔數', '市值', '權重'],
+                sector_rows,
+            )
+            if warnings_found:
+                st.markdown(
+                    '<div class="alert-card alert-warn">'
+                    '<div class="alert-body">有產業集中度超過 30%，建議分散投資。</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+    except Exception as e:
+        st.warning(f"產業集中度分析失敗: {e}")
+
+    # ── 4. Individual Position Risk Table ──
+    try:
+        if positions:
+            st.markdown('<p class="sec-header">個股風險明細</p>', unsafe_allow_html=True)
+            pos_rows = []
+            for p in positions:
+                ticker = p.get('ticker', '')
+                name = p.get('name', '')
+                pnl_pct = p.get('pnl_pct', 0)
+                cur_price = p.get('current_price', p.get('entry_price', 0))
+                entry_price = p.get('entry_price', 0)
+                weight = (cur_price * p.get('shares', 0) / equity * 100) if equity > 0 else 0
+                trail_stop = p.get('trail_stop', '--')
+                high_since = p.get('high_since_entry', '--')
+                # Status: based on pnl
+                if pnl_pct >= 10:
+                    status_tag = '<span class="tag tag-bull">獲利中</span>'
+                elif pnl_pct >= 0:
+                    status_tag = '<span class="tag tag-ok">持平</span>'
+                elif pnl_pct > -5:
+                    status_tag = '<span class="tag tag-warn">觀察</span>'
+                else:
+                    status_tag = '<span class="tag tag-danger">警戒</span>'
+
+                pnl_cls = 'c-up' if pnl_pct > 0 else 'c-down' if pnl_pct < 0 else 'c-flat'
+                trail_str = f'{trail_stop:,.1f}' if isinstance(trail_stop, (int, float)) else str(trail_stop)
+                high_str = f'{high_since:,.1f}' if isinstance(high_since, (int, float)) else str(high_since)
+
+                pos_rows.append([
+                    f'<strong>{ticker}</strong> <span style="color:#64748b">{name}</span>',
+                    f'<span class="{pnl_cls}">{pnl_pct:+.2f}%</span>',
+                    f'{weight:.1f}%',
+                    trail_str,
+                    high_str,
+                    status_tag,
+                ])
+
+            cyber_table(
+                ['股票', '損益%', '權重', '停損價', '入場後高點', '狀態'],
+                pos_rows,
+            )
+    except Exception as e:
+        st.warning(f"個股風險明細載入失敗: {e}")
+
+    # ── 5. VaR Section ──
+    try:
+        if positions:
+            st.markdown('<p class="sec-header">Value at Risk (VaR)</p>', unsafe_allow_html=True)
+            with cyber_spinner("CALCULATING VAR", "歷史模擬法風險值計算中..."):
+                from analysis.risk_calc import calculate_var
+                provider = get_data_provider("auto", market_type="TW")
+                var_result = calculate_var(positions, provider)
+
+            if var_result:
+                var_color = '#22c55e' if var_result['var_amount'] >= 0 else '#ef4444'
+                cvar_color = '#22c55e' if var_result['cvar_amount'] >= 0 else '#ef4444'
+                cyber_kpi_strip([
+                    {'label': 'VaR (95%)', 'value': f'${var_result["var_amount"]:+,.0f}',
+                     'color': var_color, 'accent': var_color},
+                    {'label': 'VaR %', 'value': f'{var_result["var_pct"]:+.2f}%',
+                     'color': var_color},
+                    {'label': 'CVaR', 'value': f'${var_result["cvar_amount"]:+,.0f}',
+                     'color': cvar_color, 'accent': cvar_color},
+                    {'label': 'CVaR %', 'value': f'{var_result["cvar_pct"]:+.2f}%',
+                     'color': cvar_color},
+                    {'label': '組合市值', 'value': f'${var_result["portfolio_value"]:,.0f}'},
+                ])
+                st.markdown(
+                    f'<div class="alert-card alert-info">'
+                    f'<div class="alert-body">{var_result["interpretation"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("VaR 計算無法完成 — 資料不足。")
+    except Exception as e:
+        st.warning(f"VaR 計算失敗: {e}")
+
+    # ── 6. Stress Test Section ──
+    try:
+        if positions:
+            st.markdown('<p class="sec-header">壓力測試</p>', unsafe_allow_html=True)
+            with cyber_spinner("STRESS TEST", "情境壓力測試計算中..."):
+                from analysis.risk_calc import stress_test
+                provider = get_data_provider("auto", market_type="TW")
+                stress_results = stress_test(positions, provider)
+
+            if stress_results:
+                stress_rows = []
+                for s in stress_results:
+                    loss = s['estimated_loss']
+                    loss_pct = s['estimated_loss_pct']
+                    loss_color = 'c-down' if loss < 0 else 'c-up' if loss > 0 else 'c-flat'
+                    stress_rows.append([
+                        f'<strong>{s["scenario"]}</strong>',
+                        f'<span class="{loss_color}">${loss:+,.0f}</span>',
+                        f'<span class="{loss_color}">{loss_pct:+.2f}%</span>',
+                    ])
+                cyber_table(['情境', '預估損益', '損益%'], stress_rows)
+            else:
+                st.caption("壓力測試無法完成 — 資料不足。")
+    except Exception as e:
+        st.warning(f"壓力測試失敗: {e}")
+
+    # ── 7. Beta Display ──
+    try:
+        if positions:
+            st.markdown('<p class="sec-header">組合 Beta</p>', unsafe_allow_html=True)
+            with cyber_spinner("BETA", "計算組合 Beta 中..."):
+                from analysis.risk_calc import calculate_portfolio_beta
+                provider = get_data_provider("auto", market_type="TW")
+                beta_result = calculate_portfolio_beta(positions, provider)
+
+            if beta_result:
+                port_beta = beta_result['portfolio_beta']
+                beta_color = '#22c55e' if 0.5 <= port_beta <= 1.3 else '#f59e0b' if port_beta <= 1.5 else '#ef4444'
+                cyber_kpi_strip([
+                    {'label': '組合 Beta', 'value': f'{port_beta:.3f}',
+                     'color': beta_color, 'accent': beta_color},
+                ])
+                st.markdown(
+                    f'<div class="alert-card alert-info">'
+                    f'<div class="alert-body">{beta_result["interpretation"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Individual betas table
+                ind_betas = beta_result.get('individual_betas', {})
+                if ind_betas:
+                    beta_rows = []
+                    for ticker, beta_val in sorted(ind_betas.items(), key=lambda x: x[1], reverse=True):
+                        b_color = 'c-up' if beta_val > 1.3 else 'c-flat' if beta_val >= 0.8 else 'c-down'
+                        beta_rows.append([
+                            f'<strong>{ticker}</strong>',
+                            f'<span class="{b_color}">{beta_val:.3f}</span>',
+                        ])
+                    cyber_table(['股票', 'Beta'], beta_rows)
+            else:
+                st.caption("Beta 計算無法完成 — 資料不足。")
+    except Exception as e:
+        st.warning(f"Beta 計算失敗: {e}")
+
+    # ── 8. Performance Attribution ──
+    try:
+        if positions:
+            st.markdown('<p class="sec-header">績效歸因</p>', unsafe_allow_html=True)
+            with cyber_spinner("ATTRIBUTION", "損益歸因分析中..."):
+                from analysis.attribution import calculate_attribution, render_attribution_chart
+                provider = get_data_provider("auto", market_type="TW")
+                attr_results, total_pnl = calculate_attribution(positions, provider)
+
+            if attr_results:
+                total_cls = 'c-up' if total_pnl > 0 else 'c-down' if total_pnl < 0 else 'c-flat'
+                st.markdown(
+                    f'<div style="text-align:center;margin-bottom:12px;">'
+                    f'<span style="color:#64748b;font-size:0.75rem;">今日組合損益</span> '
+                    f'<span class="{total_cls}" style="font-size:1.2rem;font-weight:700;">'
+                    f'${total_pnl:+,.0f}</span></div>',
+                    unsafe_allow_html=True,
+                )
+                fig_attr = render_attribution_chart(attr_results)
+                if fig_attr:
+                    _plotly_dark_layout(fig_attr, height=300)
+                    st.plotly_chart(fig_attr, use_container_width=True)
+            else:
+                st.caption("績效歸因無法完成 — 資料不足。")
+    except Exception as e:
+        st.warning(f"績效歸因失敗: {e}")
+
+    # ── Refresh Button ──
+    if st.button("重新檢查風險", use_container_width=True, type="primary"):
+        st.rerun()
 
 
 def render_daily_picks():
