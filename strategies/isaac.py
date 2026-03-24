@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import finlab
 
+pd.set_option('future.no_silent_downcasting', True)
+
 
 # ==========================================
 # 工具函數 (來自正規化信號框架)
@@ -314,8 +316,8 @@ def _compute_technicals(data_dict):
     close_min_20 = close.rolling(20).min().shift(1)
 
     # 相對強度濾網 (120 日報酬率 vs 大盤)
-    stock_ret_120 = close.pct_change(120)
-    bench_ret_120 = benchmark_close.pct_change(120)
+    stock_ret_120 = close.pct_change(120, fill_method=None)
+    bench_ret_120 = benchmark_close.pct_change(120, fill_method=None)
     rel_strength = stock_ret_120.sub(bench_ret_120, axis=0) > 0
 
     # [V3.4] RS Rank: 跨股票百分位排名 (Minervini 核心，依賴 stock_ret_120)
@@ -331,8 +333,8 @@ def _compute_technicals(data_dict):
     weekly_uptrend_daily = weekly_uptrend.reindex(master_index).ffill().fillna(False)
 
     # [V3.1] Signal C: 短期相對強弱 (20 日報酬率 vs 大盤)
-    stock_ret_20 = close.pct_change(20)
-    bench_ret_20 = benchmark_close.pct_change(20)
+    stock_ret_20 = close.pct_change(20, fill_method=None)
+    bench_ret_20 = benchmark_close.pct_change(20, fill_method=None)
     rs_short_20 = stock_ret_20.sub(bench_ret_20, axis=0) > 0
 
     # [V3.1] Signal C: 連續 3 個月營收 YoY > 20% (動能加速確認)
@@ -764,7 +766,7 @@ def _generate_signals(technicals, data_dict, params, minervini_mode):
         'c_d_deep_bear': c_d_deep_bear, 'c_d_macd_bearish': c_d_macd_bearish,
         'c_d_weak_close': c_d_weak_close,
         'exit_c1': (v_close < v_ma10) & has_ma10,
-        'exit_c2': (v_open - v_close) > (0.015 * v_close) & (v_vol > v_vol_ma5 * 2.0),
+        'exit_c2': ((v_open - v_close) > (0.015 * v_close)) & (v_vol > v_vol_ma5 * 2.0),
     }
 
 
