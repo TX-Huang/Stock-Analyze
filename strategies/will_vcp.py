@@ -140,7 +140,7 @@ def run_will_vcp_strategy(api_token, params=None):
     weekly_trend = (weekly_ma_fast > weekly_ma_slow) & weekly_valid
 
     # shift(1) 避免前瞻偏差
-    weekly_trend_daily = weekly_trend.shift(1).reindex(close.index, method='ffill').fillna(False)
+    weekly_trend_daily = weekly_trend.shift(1).reindex(close.index).ffill().fillna(False)
 
     trend_mask = universe_mask & weekly_trend_daily
 
@@ -233,3 +233,11 @@ def run_will_vcp_strategy(api_token, params=None):
     except Exception as e:
         logger.error(f"Will VCP 回測失敗: {type(e).__name__}: {e}", exc_info=True)
         raise
+
+
+# ==========================================
+# 平台標準入口函式
+# ==========================================
+def run_strategy(api_token, **kwargs):
+    """平台標準入口 — 供回測系統自動呼叫。"""
+    return run_will_vcp_strategy(api_token, params=kwargs if kwargs else None)
