@@ -1,5 +1,13 @@
 {
-  "stocks": [],
+  "stocks": [
+    {
+      "ticker": "6531",
+      "name": "愛普*",
+      "group": "存股",
+      "notes": "",
+      "added_date": "2026-03-24 11:55"
+    }
+  ],
   "groups": [
     "預設",
     "AI族",

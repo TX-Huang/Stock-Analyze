@@ -1,0 +1,54 @@
+{
+  "A_Baseline": {
+    "desc": "原始 Isaac V3.7（無改動）",
+    "cagr": 0.21325805369025885,
+    "max_drawdown": -0.30865124787288245,
+    "sharpe": 0.0,
+    "win_ratio": 0.45888487765744085,
+    "n_trades": 2604,
+    "risk_reward": 1.854,
+    "avg_hold_days": 13.2,
+    "avg_win": 11.29,
+    "avg_loss": 6.09,
+    "elapsed_sec": 106.8
+  },
+  "B_Industry3": {
+    "desc": "每產業最多 3 檔",
+    "cagr": 0.02079249925559057,
+    "max_drawdown": -0.34996266854708147,
+    "sharpe": 0.0,
+    "win_ratio": 0.4172523961661342,
+    "n_trades": 3268,
+    "risk_reward": 1.55,
+    "avg_hold_days": 4.0,
+    "avg_win": 5.22,
+    "avg_loss": 3.37,
+    "elapsed_sec": 107.2
+  },
+  "C_Slippage": {
+    "desc": "模擬 0.2% 滑價+手續費",
+    "cagr": 0.18969502199131227,
+    "max_drawdown": -0.33589582156815334,
+    "sharpe": 0.0,
+    "win_ratio": 0.45236188951160927,
+    "n_trades": 2609,
+    "risk_reward": 1.843,
+    "avg_hold_days": 13.2,
+    "avg_win": 11.35,
+    "avg_loss": 6.16,
+    "elapsed_sec": 95.6
+  },
+  "D_Combined": {
+    "desc": "產業限制 + 滑價模擬",
+    "cagr": -0.0019337747114549497,
+    "max_drawdown": -0.48139692568674997,
+    "sharpe": 0.0,
+    "win_ratio": 0.40357598978288634,
+    "n_trades": 3270,
+    "risk_reward": 1.542,
+    "avg_hold_days": 4.0,
+    "avg_win": 5.24,
+    "avg_loss": 3.4,
+    "elapsed_sec": 100.1
+  }
+}

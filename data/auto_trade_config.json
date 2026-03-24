@@ -1,0 +1,12 @@
+{
+  "mode": "simulation",
+  "order_type": "market",
+  "limit_offset_pct": 0.5,
+  "max_order_value": 500000,
+  "daily_loss_limit": 3.0,
+  "enabled": true,
+  "initial_capital": 1000000,
+  "schedule_time": "09:05",
+  "pre_trade_checks": true,
+  "telegram_notify": true
+}

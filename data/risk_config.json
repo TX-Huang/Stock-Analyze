@@ -1,0 +1,10 @@
+{
+  "trail_stop_pct": 18.0,
+  "max_loss_per_stock": 15.0,
+  "max_portfolio_dd": 20.0,
+  "max_single_weight": 15.0,
+  "max_positions": 10,
+  "etf_ma60_alert": true,
+  "etf_ma120_alert": true,
+  "daily_loss_alert": 3.0
+}

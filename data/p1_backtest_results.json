@@ -1,0 +1,80 @@
+{
+  "A_Baseline": {
+    "desc": "原始 V3.7 (vol=1.5, trail=18%, no ATR)",
+    "cagr": 0.21325805369025885,
+    "max_drawdown": -0.30865124787288245,
+    "sharpe": 0.0,
+    "win_ratio": 0.45888487765744085,
+    "n_trades": 2604,
+    "risk_reward": 1.854,
+    "avg_hold_days": 13.2,
+    "avg_win": 11.29,
+    "avg_loss": 6.09,
+    "elapsed_sec": 112.4
+  },
+  "B_Vol2.0": {
+    "desc": "Volume multiplier 提高至 2.0",
+    "cagr": 0.1597502297435509,
+    "max_drawdown": -0.33750321972453956,
+    "sharpe": 0.0,
+    "win_ratio": 0.4278914802475012,
+    "n_trades": 2203,
+    "risk_reward": 1.996,
+    "avg_hold_days": 15.5,
+    "avg_win": 12.66,
+    "avg_loss": 6.34,
+    "elapsed_sec": 106.9
+  },
+  "C_ATR_Exit": {
+    "desc": "ATR 動態出場 (60日高-3×ATR14)",
+    "cagr": 0.17638819650426685,
+    "max_drawdown": -0.30781835514944156,
+    "sharpe": 0.0,
+    "win_ratio": 0.4403753026634383,
+    "n_trades": 3391,
+    "risk_reward": 1.8,
+    "avg_hold_days": 10.1,
+    "avg_win": 9.84,
+    "avg_loss": 5.47,
+    "elapsed_sec": 103.9
+  },
+  "D_ATR+Vol": {
+    "desc": "ATR 出場 + Volume 2.0",
+    "cagr": 0.15093001547045026,
+    "max_drawdown": -0.3974550338956496,
+    "sharpe": 0.0,
+    "win_ratio": 0.4190800681431005,
+    "n_trades": 3034,
+    "risk_reward": 1.969,
+    "avg_hold_days": 11.2,
+    "avg_win": 11.18,
+    "avg_loss": 5.68,
+    "elapsed_sec": 103.6
+  },
+  "E_Trail15": {
+    "desc": "Trailing stop 縮緊至 15%",
+    "cagr": 0.21148662073332547,
+    "max_drawdown": -0.30935436770893776,
+    "sharpe": 0.0,
+    "win_ratio": 0.4583333333333333,
+    "n_trades": 2630,
+    "risk_reward": 1.845,
+    "avg_hold_days": 13.0,
+    "avg_win": 11.29,
+    "avg_loss": 6.12,
+    "elapsed_sec": 104.4
+  },
+  "F_Trail12": {
+    "desc": "Trailing stop 縮緊至 12%",
+    "cagr": 0.19196631269829378,
+    "max_drawdown": -0.2983487314485731,
+    "sharpe": 0.0,
+    "win_ratio": 0.4562354763749032,
+    "n_trades": 2692,
+    "risk_reward": 1.792,
+    "avg_hold_days": 12.6,
+    "avg_win": 10.96,
+    "avg_loss": 6.11,
+    "elapsed_sec": 108.7
+  }
+}

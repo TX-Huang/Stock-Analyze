@@ -27,3 +27,11 @@ new_vip_db/
 # Output
 output/
 logs/
+
+# Claude Code
+.claude/
+
+# Installer
+installer/
+=20.0
+*.backup/

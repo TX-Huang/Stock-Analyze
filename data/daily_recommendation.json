@@ -1,0 +1,98 @@
+{
+  "date": "2026-03-23",
+  "generated_at": "2026-03-24T10:00:17.639345+08:00",
+  "strategy": "Isaac V3.7",
+  "market_regime": "多頭",
+  "exposure": 1.0,
+  "hedge_status": "無避險信號",
+  "etf_0050": {
+    "close": 74.25,
+    "change_rate": 0,
+    "ma60": 72.16,
+    "ma120": 66.85
+  },
+  "recommendations": [
+    {
+      "rank": 1,
+      "ticker": "3709",
+      "score": 8.0,
+      "is_new": false,
+      "close": 66.6,
+      "change_rate": -4.45,
+      "name": "鑫聯大投控"
+    },
+    {
+      "rank": 2,
+      "ticker": "2360",
+      "score": 7.0,
+      "is_new": false,
+      "close": 1520.0,
+      "change_rate": -4.1,
+      "name": "致茂"
+    },
+    {
+      "rank": 3,
+      "ticker": "3081",
+      "score": 7.0,
+      "is_new": false,
+      "close": 1480.0,
+      "change_rate": -9.76,
+      "name": "聯亞"
+    },
+    {
+      "rank": 4,
+      "ticker": "3555",
+      "score": 7.0,
+      "is_new": false,
+      "close": 184.0,
+      "change_rate": -9.8,
+      "name": "博士旺"
+    },
+    {
+      "rank": 5,
+      "ticker": "5289",
+      "score": 7.0,
+      "is_new": false,
+      "close": 1085.0,
+      "change_rate": -9.96,
+      "name": "宜鼎"
+    },
+    {
+      "rank": 6,
+      "ticker": "5475",
+      "score": 7.0,
+      "is_new": false,
+      "close": 197.5,
+      "change_rate": -4.36,
+      "name": "德宏"
+    },
+    {
+      "rank": 7,
+      "ticker": "5498",
+      "score": 7.0,
+      "is_new": false,
+      "close": 57.7,
+      "change_rate": -6.63,
+      "name": "凱崴"
+    },
+    {
+      "rank": 8,
+      "ticker": "6515",
+      "score": 7.0,
+      "is_new": false,
+      "close": 7885.0,
+      "change_rate": -0.57,
+      "name": "穎崴"
+    }
+  ],
+  "new_entries": [],
+  "exits": [],
+  "n_short_signals": 0,
+  "summary": {
+    "total_picks": 8,
+    "new_entries": 0,
+    "new_exits": 0,
+    "trail_stop": 0.18,
+    "max_concurrent": 10
+  }
+}

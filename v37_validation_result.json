@@ -1,0 +1,13 @@
+{
+  "version": "V3.7",
+  "cagr": 0.22668160505416712,
+  "max_dd": -0.28258763144959775,
+  "sharpe": 1.0424128299652908,
+  "wfo_oos_avg_cagr": 0.6710170907663425,
+  "wfo_overfit_index": 0.2631578947368421,
+  "wfo_oos_positive_ratio": 0.7368421052631579,
+  "mc_p_cagr": 0.0,
+  "mc_p_sharpe": 0.015,
+  "mc_z_score": NaN,
+  "verdict": "STRONG: p<0.01, strategy is statistically significant"
+}
