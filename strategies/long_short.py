@@ -34,22 +34,22 @@ def run_long_short_strategy(api_token):
     # --- New Conditions (Fundamental, Technical, Chip) ---
     try:
         rev_growth = data.get('monthly_revenue:去年同月增減(%)')
-        cond_rev = (rev_growth > 30).reindex(close.index, method='ffill').fillna(False)
-    except: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
+        cond_rev = (rev_growth > 30).reindex(close.index).ffill().fillna(False)
+    except Exception: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
 
     try:
         open_price = data.get('price:開盤價')
         body = (close - open_price).abs()
         lower_shadow = (open_price.combine(close, min) - low)
         cond_shadow = (close > open_price) & (lower_shadow > body * 2)
-    except:
+    except Exception:
         cond_shadow = pd.DataFrame(False, index=close.index, columns=close.columns)
 
     try:
         foreign_buy = data.get('institutional_investors:外資買賣超股數')
         trust_buy = data.get('institutional_investors:投信買賣超股數')
         cond_chip = (foreign_buy.fillna(0) + trust_buy.fillna(0)) > 0
-    except: cond_chip = pd.DataFrame(False, index=close.index, columns=close.columns)
+    except Exception: cond_chip = pd.DataFrame(False, index=close.index, columns=close.columns)
 
     # --- LONG LOGIC ---
     l_cond1 = (ma50 > ma150) & (ma150 > ma200)
@@ -98,7 +98,7 @@ def run_long_short_strategy(api_token):
 
     import logging
     import os
-    from data_provider import safe_finlab_sim
+    from data.provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
         report = safe_finlab_sim(final_pos, resample='D', name='多空策略', upload=False)

@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import hashlib
 
 from data.provider import get_data_provider
 from analysis.indicators import (
@@ -11,7 +12,18 @@ from analysis.ai_core import analyze_signals
 from utils.helpers import validate_ticker
 
 
-def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_name=""):
+def _get_provider_for_market(market_type, data_source="auto", **provider_kwargs):
+    """
+    根據市場類型和資料來源選擇合適的 Provider。
+    - data_source="auto": 台股使用永豐金優先 + YFinance 備援，美股使用 YFinance
+    - data_source="sinopac": 強制使用永豐金
+    - data_source="yfinance": 強制使用 YFinance
+    """
+    return get_data_provider(data_source, market_type=market_type, **provider_kwargs)
+
+
+def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_name="",
+                           data_source="auto", **provider_kwargs):
     if timeframe == "1wk":
         interval = "1wk"; period = "5y"; is_weekly = True
     else:
@@ -23,20 +35,24 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
     else:
         ma_short, ma_long = 20, 50
 
-    provider = get_data_provider("yfinance", market_type=market_type)
+    provider = _get_provider_for_market(market_type, data_source=data_source, **provider_kwargs)
+    source_label = "永豐金" if (data_source == "sinopac" or (data_source == "auto" and market_type == "TW" and provider_kwargs.get('api_key'))) else "yfinance"
+
     df = provider.get_historical_data(ticker, period=period, interval=interval)
 
-    if df.empty or len(df) <= 30:
-        st.warning(f"⚠️ yfinance 無法取得 {ticker} 的歷史資料 (rows={len(df)}). 請檢查代碼是否正確或網路連線。")
+    if df is None or df.empty or len(df) <= 30:
+        row_count = len(df) if df is not None else 0
+        st.warning(f"⚠️ {source_label} 無法取得 {ticker} 的歷史資料 (rows={row_count}). 請檢查代碼是否正確或網路連線。")
         return None
     try:
+        df = df.copy()  # Don't mutate cached data
         info_data = provider.get_stock_info(ticker)
         final_full_t = info_data.get('raw_ticker', ticker)
 
         close = df['Close'].iloc[-1]
         chg = ((close - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
         vol_curr = df['Volume'].iloc[-1]
-        vol_avg = df['Volume'].iloc[:-5].mean()
+        vol_avg = df['Volume'].iloc[-21:-1].mean() if len(df) >= 22 else df['Volume'].iloc[:-1].mean()
         r_vol = vol_curr / vol_avg if vol_avg > 0 else 0
         ma_s = df['Close'].rolling(ma_short).mean().iloc[-1]
         ma_l = df['Close'].rolling(ma_long).mean().iloc[-1]
@@ -86,7 +102,20 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
         return None
 
 
-def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_historical(ticker, period, interval, data_source, market_type):
+    """Cached wrapper around provider.get_historical_data() to avoid redundant fetches."""
+    provider = _get_provider_for_market(market_type, data_source=data_source)
+    return provider.get_historical_data(ticker, period=period, interval=interval)
+
+
+def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d",
+                          data_source="auto", use_cache=True, **provider_kwargs):
+    """掃描指定 sector_map 中的所有股票。use_cache=True 時，同一 market+timeframe 組合在同一 session 內只掃一次。"""
+    cache_key = f"_scan_cache_{market}_{timeframe}"
+    if use_cache and cache_key in st.session_state:
+        return st.session_state[cache_key]
+
     if timeframe == "1wk":
         interval = "1wk"; period = "5y"; is_weekly = True
     else:
@@ -98,7 +127,7 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
     else:
         ma_short, ma_long = 20, 50
 
-    provider = get_data_provider("yfinance", market_type=market_type)
+    provider = _get_provider_for_market(market_type, data_source=data_source, **provider_kwargs)
 
     all_data = []
     unique_tickers = []
@@ -122,7 +151,8 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
         if (i+1) <= len(unique_tickers):
             progress.progress((i+1)/len(unique_tickers))
 
-        df = provider.get_historical_data(t, period=period, interval=interval)
+        df = _cached_get_historical(t, period=period, interval=interval,
+                                     data_source=data_source, market_type=market_type)
         if df.empty or len(df) <= 30:
             continue
 
@@ -164,4 +194,7 @@ def scan_tickers_from_map(market, sector_map, strategy, timeframe="1d"):
             continue
     progress.empty()
     st_text.empty()
-    return pd.DataFrame(all_data)
+    result_df = pd.DataFrame(all_data)
+    if use_cache:
+        st.session_state[cache_key] = result_df
+    return result_df

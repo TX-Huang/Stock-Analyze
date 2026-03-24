@@ -4,7 +4,56 @@ import pandas as pd
 import numpy as np
 import finlab
 
-def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
+
+# ==========================================
+# 工具函數 (來自正規化信號框架)
+# ==========================================
+
+def compute_hv(price_series, look_back_period=50):
+    """
+    Historical Volatility (歷史波動率)
+    使用 log return 的滾動標準差計算。
+    """
+    log_return = np.log(price_series / price_series.shift(1))
+    return log_return.rolling(look_back_period).std()
+
+
+def rolling_mad(series, window, min_periods=None):
+    """
+    Rolling Median Absolute Deviation (滾動中位數絕對偏差)
+    用於 Robust Z-score 計算，比標準差更抗離群值。
+    """
+    if min_periods is None:
+        min_periods = window
+    arr = series.to_numpy(dtype=np.float64)
+    n = len(arr)
+    out = np.full(n, np.nan)
+    for i in range(n):
+        start = max(0, i - window + 1)
+        window_data = arr[start:i + 1]
+        window_data = window_data[~np.isnan(window_data)]
+        if len(window_data) >= min_periods:
+            med = np.median(window_data)
+            out[i] = np.median(np.abs(window_data - med))
+    return pd.Series(out, index=series.index)
+
+
+def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mode='signal_e',
+                       params=None, sim_start=None, sim_end=None, raw_mode=False):
+    """
+    執行 Isaac V3.7 策略回測。
+    V3.7: Signal D 轉避險指標 + Score Weight + Dynamic Exposure
+
+    params (dict, 可選): 覆蓋預設參數
+        trail_stop       (float) : 追蹤停損比例，預設 0.18
+        rsi_threshold    (int)   : Signal B RSI 超賣門檻，預設 28
+        volume_mult      (float) : 突破量能倍率（Signal A/B），預設 1.5
+        supply_danger_pct(float) : 供給區安全距離，預設 0.97
+        liq_min          (int)   : 流動性門檻（均量股數），預設 500000
+    sim_start (str): 回測起始日 (YYYY-MM-DD)，用於 WFO 窗口
+    sim_end   (str): 回測結束日 (YYYY-MM-DD)，用於 WFO 窗口
+    raw_mode (bool): 若 True，不執行 sim，返回 final_pos 和相關數據供外部配置
+    """
     from data.provider import sanitize_dataframe
 
     if api_token:
@@ -12,6 +61,22 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     if stop_loss is not None: stop_loss = float(stop_loss)
     if take_profit is not None: take_profit = float(take_profit)
+
+    # --- 可調參數 (WFO 網格搜索的優化目標) ---
+    p = params or {}
+    _trail_stop        = float(p.get('trail_stop',        0.18))
+    _rsi_threshold     = int(p.get('rsi_threshold',       28))
+    _volume_mult       = float(p.get('volume_mult',       1.5))
+    _supply_danger_pct = float(p.get('supply_danger_pct', 0.97))
+    _liq_min           = int(p.get('liq_min',             500000))
+    # --- 實驗參數 (優化測試用) ---
+    _atr_exit          = bool(p.get('atr_exit',           False))   # ATR 動態出場
+    _disable_d         = bool(p.get('disable_d',          False))
+    _time_stop_days    = int(p.get('time_stop_days',      0))       # 時間停損 (0=關閉)
+    _min_score         = float(p.get('min_score',         4))       # 最低 score 門檻 (0=不過濾)
+    _confirm_days      = int(p.get('confirm_days',        0))       # 突破確認天數 (0=不確認)
+    _max_per_industry  = int(p.get('max_per_industry',    0))       # 每產業最多N檔 (0=不限)
+    _breadth_filter    = bool(p.get('breadth_filter',     False))   # 大盤寬度過濾
 
     # ==========================================
     # 1. 數據抓取 (Fetch Data)
@@ -27,16 +92,16 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         if isinstance(obj, pd.DataFrame):
             obj = sanitize_dataframe(obj, source_name=obj_name)
         if isinstance(obj, pd.Series):
-            obj = obj.reindex(master_index, method='ffill')
+            obj = obj.reindex(master_index).ffill()
             return obj.fillna(0).values.reshape(-1, 1)
         elif isinstance(obj, pd.DataFrame):
             if not is_benchmark:
                 df_temp = obj.copy()
                 df_temp.columns = df_temp.columns.astype(str)
-                df_aligned = df_temp.reindex(index=master_index, columns=master_columns_str, method='ffill')
+                df_aligned = df_temp.reindex(index=master_index, columns=master_columns_str).ffill()
                 return df_aligned.fillna(0).values
             else:
-                obj = obj.reindex(index=master_index, method='ffill')
+                obj = obj.reindex(index=master_index).ffill()
                 return obj.fillna(0).values
         elif isinstance(obj, np.ndarray):
             return obj
@@ -52,34 +117,48 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 大盤基準
     benchmark_close = data.get('price:收盤價')['0050']
 
-    # 基本面數據
+    # 基本面數據 — [V3.1 Fix] 分離 try/except 避免一個失敗全部歸零
     try:
         rev_growth = data.get('monthly_revenue:去年同月增減(%)')
-        rev_current = data.get('monthly_revenue:當月營收')
-        capital = data.get('finance_statement:股本')
-    except:
+    except Exception:
         rev_growth = pd.DataFrame(0, index=master_index, columns=close.columns)
+
+    try:
+        rev_current = data.get('monthly_revenue:當月營收')
+    except Exception:
         rev_current = pd.DataFrame(0, index=master_index, columns=close.columns)
+
+    try:
+        capital = data.get('finance_statement:股本')
+    except Exception:
         capital = pd.DataFrame(10000000, index=master_index, columns=close.columns)
 
     try:
         eps = data.get('finance_statement:每股盈餘')
-        op_income = data.get('finance_statement:營業利益')
-        roe = data.get('finance_statement:權益報酬率')
-        op_margin = data.get('finance_statement:營業利益率')
-        pe = data.get('price:本益比')
-    except:
+    except Exception:
         eps = pd.DataFrame(0, index=master_index, columns=close.columns)
+    try:
+        op_income = data.get('finance_statement:營業利益')
+    except Exception:
         op_income = pd.DataFrame(0, index=master_index, columns=close.columns)
+    try:
+        roe = data.get('finance_statement:權益報酬率')
+    except Exception:
         roe = pd.DataFrame(0, index=master_index, columns=close.columns)
+    try:
+        op_margin = data.get('finance_statement:營業利益率')
+    except Exception:
         op_margin = pd.DataFrame(0, index=master_index, columns=close.columns)
+    try:
+        pe = data.get('price:本益比')
+    except Exception:
         pe = pd.DataFrame(100, index=master_index, columns=close.columns)
 
     try:
         foreign_buy = data.get('institutional_investors:外資買賣超股數').fillna(0)
         trust_buy = data.get('institutional_investors:投信買賣超股數').fillna(0)
         inst_net_buy = foreign_buy + trust_buy
-    except:
+    except Exception:
         inst_net_buy = pd.DataFrame(0, index=master_index, columns=close.columns)
 
     # ==========================================
@@ -91,21 +170,40 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     ma50 = close.rolling(50).mean()
     ma60 = close.rolling(60).mean()
     ma120 = close.rolling(120).mean()
+    ma10 = close.rolling(10).mean()       # [V3.1] Signal C 動能出場用
 
     vol_ma5 = vol.rolling(5).mean()
     vol_ma20 = vol.rolling(20).mean()
 
     bench_ma60 = benchmark_close.rolling(60).mean()
 
-    # RSI 指標
+    # RSI 指標 (Wilder's RMA - 與 TradingView / Bloomberg 一致)
     def rsi(series, period=14):
         delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
+        gain = delta.where(delta > 0, 0.0)
+        loss = (-delta).where(delta < 0, 0.0)
+        # Wilder's RMA (Recursive Moving Average) = EWM with alpha=1/period
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+        rs = avg_gain / avg_loss
         return 100 - (100 / (1 + rs))
 
     my_rsi = rsi(close, 14)
+
+    # [V3.3] ATR (Average True Range) — 動態 Trailing Stop 用
+    high_df = sanitize_dataframe(high, "FinLab_High")
+    low_df = sanitize_dataframe(low, "FinLab_Low")
+    prev_close = close.shift(1)
+    tr1 = high_df - low_df
+    tr2 = (high_df - prev_close).abs()
+    tr3 = (low_df - prev_close).abs()
+    # 修正: 用 numpy maximum 對齊
+    true_range = tr1.combine(tr2, np.maximum).combine(tr3, np.maximum)
+    atr_14 = true_range.rolling(14).mean()
+
+    # 動態 Trailing Stop: 60 日滾動高點 - 3x ATR
+    rolling_high_60 = close.rolling(60, min_periods=5).max()
+    trail_level = rolling_high_60 - 3.0 * atr_14
 
     # 基本面輔助指標
     rev_12m_max = rev_current.rolling(12).max()
@@ -120,13 +218,114 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     bb_std = close.rolling(20).std()
     bb_upper = ma20 + 2 * bb_std
     bb_lower = ma20 - 2 * bb_std
-    bb_bandwidth = (bb_upper - bb_lower) / ma20
+    bb_bandwidth = (bb_upper - bb_lower) / ma20.where(ma20 > 0, np.nan)
+    bb_bandwidth = bb_bandwidth.fillna(0)
     bb_contracting = bb_bandwidth < bb_bandwidth.rolling(60).quantile(0.25)
+
+    # [V3.3] K 線型態偵測 (向量化, 用於評分加分)
+    # 基於《陰線陽線》— 只取高可信度型態
+    prev_close_1 = close.shift(1)
+    prev_open_1 = sanitize_dataframe(open_, "Open").shift(1)
+    prev_close_2 = close.shift(2)
+    prev_open_2 = sanitize_dataframe(open_, "Open").shift(2)
+    open_df = sanitize_dataframe(open_, "Open")
+
+    k_body = (close - open_df).abs()
+    k_body_1 = (prev_close_1 - prev_open_1).abs()
+    k_body_2 = (prev_close_2 - prev_open_2).abs()
+    k_avg_body = k_body.rolling(14).mean()
+
+    k_is_bull = close > open_df
+    k_is_bear_1 = prev_close_1 < prev_open_1
+    k_is_bull_2_bear = prev_close_2 < prev_open_2  # 前天陰線
+
+    # 多頭吞噬: 前陰今陽, 今實體完全包覆前實體
+    pat_bull_engulf = (k_is_bear_1 & k_is_bull &
+                       (open_df <= prev_close_1) & (close >= prev_open_1) &
+                       (k_body > k_body_1))
+
+    # 晨星: 前天長陰 + 昨天小K + 今天長陽收過前天中點
+    pat_morning_star = (k_is_bull_2_bear & (k_body_2 > k_avg_body) &
+                        (k_body_1 <= k_avg_body * 0.5) &
+                        k_is_bull & (k_body > k_avg_body) &
+                        (close > (prev_open_2 + prev_close_2) / 2))
+
+    # 空頭吞噬 (出場用): 前陽今陰, 今實體包覆前實體
+    k_is_bull_1 = prev_close_1 > prev_open_1
+    k_is_bear = close < open_df
+    pat_bear_engulf = (k_is_bull_1 & k_is_bear &
+                       (open_df >= prev_close_1) & (close <= prev_open_1) &
+                       (k_body > k_body_1))
+
+    # 暮星 (出場用): 前天長陽 + 昨天小K + 今天長陰
+    k_is_bull_2 = prev_close_2 > prev_open_2
+    pat_evening_star = (k_is_bull_2 & (k_body_2 > k_avg_body) &
+                        (k_body_1 <= k_avg_body * 0.5) &
+                        k_is_bear & (k_body > k_avg_body) &
+                        (close < (prev_open_2 + prev_close_2) / 2))
+
+    # [V3.4] Minervini + Edwards-Magee 整合指標 (不依賴 stock_ret_120 的部分)
+    ma150 = close.rolling(150).mean()
+    ma200 = close.rolling(200).mean()
+    high_252 = close.rolling(252).max()
+    low_252 = close.rolling(252).min()
+    vol_ma50 = vol.rolling(50).mean()
+    # VCP 量縮偵測: 近 10 日內有出現量 < 50日均量一半
+    vol_dry_up = (vol < vol_ma50 * 0.5).rolling(10).max()
+    # BB 整理偵測 (E&M): 近 10 日內有 BB 收縮到 P20 以下
+    bb_consolidation = (bb_bandwidth < bb_bandwidth.rolling(60).quantile(0.20)).rolling(10).max()
+
+    # [V3.2] MACD 指標 (Signal A 確認 + Signal D 空頭確認)
+    macd_fast = close.ewm(span=12, adjust=False).mean()
+    macd_slow = close.ewm(span=26, adjust=False).mean()
+    macd_line = macd_fast - macd_slow
+    macd_signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist = macd_line - macd_signal_line
+
+    # [V3.2] 20 日低點 (Signal D 空頭破底用)
+    close_min_20 = close.rolling(20).min().shift(1)
 
     # 相對強度濾網 (120 日報酬率 vs 大盤)
     stock_ret_120 = close.pct_change(120)
     bench_ret_120 = benchmark_close.pct_change(120)
     rel_strength = stock_ret_120.sub(bench_ret_120, axis=0) > 0
+
+    # [V3.4] RS Rank: 跨股票百分位排名 (Minervini 核心，依賴 stock_ret_120)
+    rs_rank = stock_ret_120.rank(axis=1, pct=True) * 100
+
+    # [V3.3] 多時間框架: 週線趨勢確認
+    # 週線 close > 週 MA10 > 週 MA20 = 週線多頭排列
+    weekly_close = close.resample('W').last()
+    weekly_ma10 = weekly_close.rolling(10).mean()   # 10 週 ≈ 50 交易日
+    weekly_ma20 = weekly_close.rolling(20).mean()   # 20 週 ≈ 100 交易日
+    weekly_uptrend = (weekly_close > weekly_ma10) & (weekly_ma10 > weekly_ma20)
+    # 回填到日線頻率 (週線結果 ffill 到每天)
+    weekly_uptrend_daily = weekly_uptrend.reindex(master_index).ffill().fillna(False)
+
+    # [V3.1] Signal C: 短期相對強弱 (20 日報酬率 vs 大盤)
+    stock_ret_20 = close.pct_change(20)
+    bench_ret_20 = benchmark_close.pct_change(20)
+    rs_short_20 = stock_ret_20.sub(bench_ret_20, axis=0) > 0
+
+    # [V3.1] Signal C: 連續 3 個月營收 YoY > 20% (動能加速確認)
+    # shift(22) ≈ 上個月, shift(44) ≈ 兩個月前 (月營收資料 ffill 到每日)
+    rev_yoy_m0 = rev_growth > 20
+    rev_yoy_m1 = rev_growth.shift(22) > 20
+    rev_yoy_m2 = rev_growth.shift(44) > 20
+    rev_momentum_3m = rev_yoy_m0 & rev_yoy_m1 & rev_yoy_m2
+
+    # Historical Volatility (HV) 歷史波動率濾網
+    hv = compute_hv(close, 50)
+    hv_q80 = hv.rolling(120).quantile(0.8)
+    hv_q20 = hv.rolling(120).quantile(0.2)
+    hv_normal = (hv >= hv_q20) & (hv <= hv_q80)   # 正常波動區間 (避開極端)
+    hv_compressed = hv < hv_q20                      # 波動收縮 (即將爆發)
+
+    # Z-score 信號正規化 (價格偏離均值程度)
+    z_std_50 = close.rolling(50).std()
+    z_std_50_safe = z_std_50.replace(0, np.nan)
+    z_score = (close - ma50) / z_std_50_safe          # 重用已計算的 ma50
+    z_score = z_score.fillna(0).replace([np.inf, -np.inf], 0)
 
     # 反向/槓桿 ETF 黑名單濾網
     import re as _re
@@ -165,6 +364,44 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_bb_contracting = to_numpy(bb_contracting)
     v_rel_strength = to_numpy(rel_strength)
 
+    # HV & Z-score NumPy 轉換
+    v_hv_normal = to_numpy(hv_normal)
+    v_hv_compressed = to_numpy(hv_compressed)
+    v_z_score = to_numpy(z_score)
+
+    # [V3.1] Signal C NumPy 轉換
+    v_ma10 = to_numpy(ma10)
+    v_rs_short = to_numpy(rs_short_20)
+    v_rev_momentum = to_numpy(rev_momentum_3m)
+
+    # [V3.3] 週線趨勢 NumPy 轉換
+    v_weekly_uptrend = to_numpy(weekly_uptrend_daily)
+
+    # [V3.3] K 線型態 NumPy 轉換
+    v_pat_bull_engulf = to_numpy(pat_bull_engulf)
+    v_pat_morning_star = to_numpy(pat_morning_star)
+    v_pat_bear_engulf = to_numpy(pat_bear_engulf)
+    v_pat_evening_star = to_numpy(pat_evening_star)
+
+    # [V3.2] MACD & Signal D NumPy 轉換
+    v_macd_hist = to_numpy(macd_hist)
+    v_macd_hist_prev = to_numpy(macd_hist.shift(1))
+    v_close_min_20 = to_numpy(close_min_20)
+
+    # [V3.4] Minervini + E&M NumPy 轉換
+    v_ma150 = to_numpy(ma150)
+    v_ma200 = to_numpy(ma200)
+    v_high_252 = to_numpy(high_252)
+    v_low_252 = to_numpy(low_252)
+    v_rs_rank = to_numpy(rs_rank)
+    v_vol_dry = to_numpy(vol_dry_up)
+    v_bb_consol = to_numpy(bb_consolidation)
+    has_ma150 = v_ma150 > 0
+    has_ma200 = v_ma200 > 0
+
+    # [V3.3] 動態 Trailing Stop NumPy 轉換
+    v_trail_level = to_numpy(trail_level)
+
     # 基本面
     v_rev_growth = to_numpy(rev_growth)
     v_rev_current = to_numpy(rev_current)
@@ -201,6 +438,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     #   4. Signal B 使用獨立的出場邏輯 (回復到 MA60 以上就出場)
     # ==========================================
 
+    has_ma10 = v_ma10 > 0
     has_ma20 = v_ma20 > 0
     has_ma50 = v_ma50 > 0
     has_ma60 = v_ma60 > 0
@@ -210,11 +448,11 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     v_bullish = (v_bench > v_bench_ma60 * 1.01) & (v_bench_ma60 > 0)
     v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0) & (v_bench > 0)
 
-    # 流動性濾網 (降低門檻: 100萬→50萬股，增加選股範圍)
-    v_liq = (v_vol_ma20 > 500000)
+    # 流動性濾網
+    v_liq = (v_vol_ma20 > _liq_min)
 
     # Supply Zone Filter (套牢區濾網)
-    c_supply_danger = (v_close >= v_high_250 * 0.95) & (v_close < v_high_250) & (v_high_250 > 0)
+    c_supply_danger = (v_close >= v_high_250 * _supply_danger_pct) & (v_close < v_high_250) & (v_high_250 > 0)
     c_safe_supply = ~c_supply_danger
 
     # 強勢收盤確認 (收盤在日內振幅前 25%)
@@ -230,17 +468,43 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     # 相對強度確認
     c_rs = v_rel_strength > 0
 
+    # [V3.4] Minervini 趨勢模板 + Edwards-Magee 新高突破 複合條件
+    # Minervini: MA50 > MA150 > MA200 排列 + MA200 上升 + 價格結構
+    c_minervini_ma = ((v_close > v_ma50) & (v_ma50 > v_ma150) & (v_ma150 > v_ma200)
+                      & has_ma50 & has_ma150 & has_ma200)
+    v_ma200_prev = np.zeros_like(v_ma200)
+    v_ma200_prev[20:, :] = v_ma200[:-20, :]
+    c_ma200_up = (v_ma200 > v_ma200_prev) & (v_ma200_prev > 0)
+    c_above_52w_low = v_close > (v_low_252 * 1.25)
+    c_near_52w_high = v_close > (v_high_252 * 0.75)
+    c_full_minervini = c_minervini_ma & c_ma200_up & c_above_52w_low & c_near_52w_high
+
+    # Edwards-Magee: 52 週新高 + 整理後突破
+    c_52w_new_high = v_close >= v_high_252
+    c_em_consolidation = v_bb_consol > 0  # 近 10 日有 BB 收縮
+    c_rs_rank_70 = v_rs_rank > 70
+    c_vol_dry = v_vol_dry > 0  # VCP 量縮
+
     # === 訊號 A: 技術面突破 (Growth Breakout) ===
     # [V3] 只用技術面作為進場門檻, 基本面全部改為評分加分
+    # [V3.1] 加入 HV 正常區間濾網 (避開極端波動/死水行情)
     c_trend = (v_close > v_ma20) & (v_ma20 > v_ma60) & has_ma20 & has_ma60
-    c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 1.5)
+    c_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * _volume_mult)
+    c_hv_ok = v_hv_normal > 0  # 波動率在正常區間 (P20~P80)
 
-    sig_a = (v_bullish & c_trend & c_breakout & v_liq & c_safe_supply & v_etf_ok)
+    # [V3.4] 三種 Minervini 整合模式
+    if minervini_mode == 'gate':
+        # 模式 A: Minervini 趨勢模板作為 Signal A 進場門檻
+        sig_a = (v_bullish & c_trend & c_breakout & v_liq & c_safe_supply
+                 & v_etf_ok & c_hv_ok & c_full_minervini)
+    else:
+        # 預設 / score / signal_e: Signal A 保持不變
+        sig_a = (v_bullish & c_trend & c_breakout & v_liq & c_safe_supply & v_etf_ok & c_hv_ok)
 
     # === 訊號 B: 均值回歸 (Reversion) ===
     c_oversold = (v_close < v_ma120) & has_ma120
-    c_rsi_panic = v_rsi < 30
-    c_vol_panic = v_vol > v_vol_ma20 * 1.5  # 放寬: 2x → 1.5x
+    c_rsi_panic = v_rsi < _rsi_threshold
+    c_vol_panic = v_vol > v_vol_ma20 * _volume_mult
 
     body = np.abs(v_close - v_open)
     lower_shadow = np.minimum(v_close, v_open) - v_low
@@ -248,31 +512,136 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
 
     sig_b = v_bullish & c_oversold & c_rsi_panic & c_hammer & v_liq & v_etf_ok
 
-    # === 訊號 C: 放空 (Short) - DISABLED ===
-    sig_c = np.zeros_like(v_close, dtype=bool)
+    # [實驗] 突破確認: 要求連續 N 天都滿足突破條件
+    if _confirm_days > 0:
+        sig_a_df = pd.DataFrame(sig_a, index=master_index, columns=close.columns)
+        sig_a_confirmed = sig_a_df.rolling(_confirm_days, min_periods=_confirm_days).min() > 0
+        sig_a = sig_a_confirmed.values
+
+    # [實驗] 大盤寬度過濾: 站上 MA20 的股票比例 < 30% 時暫停開新倉
+    if _breadth_filter:
+        above_ma20_ratio = (v_close > v_ma20).sum(axis=1) / (v_ma20 > 0).sum(axis=1)
+        breadth_ok = (above_ma20_ratio >= 0.30).reshape(-1, 1)
+        sig_a = sig_a & breadth_ok
+        sig_b = sig_b & breadth_ok
+
+    # === 訊號 C: 動能追蹤 (Momentum Trading) - [V3.1 新增] ===
+    # 設計哲學: 針對「無法估值但動能強勁」的轉機股
+    # 捨棄 P/E 估值，擁抱相對強弱 + 營收動能加速
+    c_rs_short = v_rs_short > 0                                  # 20日報酬 > 大盤
+    c_above_ma20 = (v_close > v_ma20) & has_ma20                 # 收盤 > 月線 (動能延續)
+    c_rev_momentum = v_rev_momentum > 0                          # 連續3月營收 YoY > 20%
+
+    sig_c = (v_bullish & c_rs_short & c_above_ma20 & c_breakout
+             & c_rev_momentum & v_liq & v_etf_ok)
+
+    # Signal C 專用出場條件
+    exit_c1 = (v_close < v_ma10) & has_ma10
+    c_bearish_body = (v_open - v_close) > (0.015 * v_close)
+    c_high_vol_candle = v_vol > v_vol_ma5 * 2.0
+    exit_c2 = c_bearish_body & c_high_vol_candle
+    exit_c = exit_c1 | exit_c2
+
+    # Signal C 專用評分 (不含 P/E 估值，上限 5)
+    score_c = np.ones_like(v_close)
+    score_c += c_rs_short.astype(int)                             # +1: 短期相對強弱
+    score_c += c_rev_momentum.astype(int)                         # +1: 營收動能加速
+    score_c += c_strong_close.astype(int)                         # +1: 強勢收盤
+    score_c += (v_vol > v_vol_ma5 * 2.0).astype(int)             # +1: 量能超強
+    score_c += (v_hv_compressed > 0).astype(int)                  # +1: 波動收縮蓄勢
+    score_c = np.minimum(score_c, 5)                              # 上限 5 (低於 Signal A)
+
+    # === [V3.4] 訊號 E: Minervini+E&M 混合 (signal_e 模式) ===
+    if minervini_mode == 'signal_e':
+        # 進場: Minervini 趨勢模板 + E&M 新高/整理突破 + 帶量
+        c_e_breakout = (v_close > v_close_max_20) & (v_vol > v_vol_ma5 * 2.0)
+        sig_e = (c_full_minervini & c_e_breakout & (c_52w_new_high | c_em_consolidation)
+                 & c_rs_rank_70 & v_liq & v_etf_ok)
+        # 出場: close < MA50 (Minervini 標準)
+        exit_e = (v_close < v_ma50) & has_ma50
+        # 評分
+        score_e = np.ones_like(v_close)
+        score_e += c_rs_rank_70.astype(int)              # +1: RS > 70
+        score_e += (c_52w_new_high > 0).astype(int)      # +1: 52 週新高
+        score_e += (c_vol_dry > 0).astype(int)            # +1: VCP 量縮
+        score_e += (v_rev_growth > 20).astype(int)        # +1: 營收 YoY > 20%
+        score_e += (v_eps_sum > 0).astype(int)            # +1: EPS > 0
+        score_e += (v_inst_streak > 0).astype(int)        # +1: 法人連買
+        score_e = np.minimum(score_e, 7)
+    else:
+        sig_e = np.zeros_like(v_close, dtype=bool)
+        exit_e = np.zeros_like(v_close, dtype=bool)
+        score_e = np.zeros_like(v_close)
+
+    # === 訊號 D: 熊市放空 (Bear Market Short) - [V3.2 新增] ===
+    # 設計哲學: 只在明確空頭市場中，放空技術面破位的弱勢股
+    # 保守設計: 最多 2 檔空頭部位，快速停利了結
+    # 衝突防護: v_bullish 和 v_bearish 在同一天互斥，合併時多頭優先
+
+    # 空頭趨勢下降排列: 收盤 < MA20 < MA60
+    c_d_trend_down = (v_close < v_ma20) & (v_ma20 < v_ma60) & has_ma20 & has_ma60
+
+    # 破底: 收盤跌破 20 日低點 (帶量, 且低於 MA120 確認深度空頭)
+    c_d_breakdown = (v_close < v_close_min_20) & (v_close_min_20 > 0) & (v_vol > v_vol_ma5 * 2.0)
+    c_d_deep_bear = (v_close < v_ma120) & (v_ma120 > 0)  # 必須低於 MA120 (深度空頭)
+
+    # 弱勢收盤: 收盤在日內振幅底部 25%
+    c_d_weak_close = v_close_position <= 0.25
+
+    # MACD 空頭確認: histogram 負且持續惡化
+    c_d_macd_bearish = (v_macd_hist < 0) & (v_macd_hist < v_macd_hist_prev)
+
+    sig_d = (v_bearish & c_d_trend_down & c_d_breakdown & c_d_deep_bear
+             & c_d_weak_close & c_d_macd_bearish & v_liq & v_etf_ok)
+
+    # [實驗] 關閉 Signal D
+    if _disable_d:
+        sig_d = np.zeros_like(v_close, dtype=bool)
+
+    # Signal D 出場條件
+    # 1. 回復 MA20 以上 (趨勢恢復, 回補)
+    exit_d1 = (v_close > v_ma20) & has_ma20
+    # 2. RSI 超買 > 75 (可能反彈, 回補出場)
+    exit_d2 = v_rsi > 75
+    # 3. 爆量長紅 (多頭反攻信號: 漲幅>1.5% + 量>5日均量2x)
+    c_d_bullish_body = (v_close - v_open) > (0.015 * v_close)
+    c_d_high_vol_bull = v_vol > v_vol_ma5 * 2.0
+    exit_d3 = c_d_bullish_body & c_d_high_vol_bull
+    # 4. 市場轉多 → 強制回補所有空頭 (防止空頭延續到多頭市場)
+    exit_d4 = v_bullish
+    exit_d = exit_d1 | exit_d2 | exit_d3 | exit_d4
+
+    # Signal D 評分 (負值代表空頭, 上限 -3, 保守配置)
+    score_d = -np.ones_like(v_close)
+    score_d -= c_d_weak_close.astype(int)                         # -1: 弱勢收盤
+    score_d -= (c_d_macd_bearish > 0).astype(int)                 # -1: MACD 確認
+    score_d = np.maximum(score_d, -3)                              # 上限 -3 (保守)
 
     # ==========================================
-    # 5. 部位重建 V3 (Position Reconstruction)
+    # 5. 部位重建 V3.1 (Position Reconstruction)
     # ==========================================
     #
     # [V3 關鍵修正] 進場/出場優先順序
     # 舊邏輯: entries 先寫, exits 後寫 → 同天進出場時, exit 覆蓋 entry → 永遠不持倉
     # 新邏輯: exits 先寫, entries 後寫 → 進場信號優先 (買入信號比出場信號更有信息量)
+    #
+    # [V3.1 新增] 三軌部位系統:
+    # Track AB: Signal A + B (出場: MA60 跌破) — 原有邏輯
+    # Track C:  Signal C 動能追蹤 (出場: MA10 跌破 / 爆量長黑) — 更緊出場
+    # 合併: np.maximum (任一信號仍看多則持有)
     # ==========================================
-
-    long_entries = sig_a | sig_b
-    short_entries = sig_c
 
     # [V3] Signal A 出場: 跌破 MA60 (給較大的波動空間)
     exit_a = (v_close < v_ma60) & has_ma60
 
-    # [V3] Signal B 出場: 回復到 MA60 以上 (均值回歸完成) 或 RSI > 60
-    # 這避免了 V2.1 中 "close < MA50 exit" 與 "close < MA120 entry" 的矛盾
-    exit_b = ((v_close > v_ma60) & has_ma60) | (v_rsi > 60)
+    # [實驗] ATR 動態出場: close < (60日高點 - 3*ATR14)
+    if _atr_exit:
+        exit_atr = (v_close < v_trail_level) & (v_trail_level > 0)
+        exit_a = exit_a | exit_atr
 
-    # 統一出場 (保守取聯集)
-    long_exits = exit_a  # 主要出場信號: 跌破 MA60
-    short_exits = (v_close > v_ma20) | v_bullish | (v_rsi < 20)
+    # Signal A+B 統一出場
+    long_entries_ab = sig_a | sig_b
+    long_exits_ab = exit_a
 
     # [V3] 優化評分系統 (基本面全部在這裡, NaN→0 不會失敗)
     score = np.ones_like(v_close)
@@ -289,6 +658,20 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     score += c_strong_close.astype(int)                            # +1: 強勢收盤
     score += c_rs.astype(int)                                      # +1: 相對強度
     score += c_bb_tight.astype(int)                                # +1: 波動收縮
+    score += (v_macd_hist > 0).astype(int)                         # +1: [V3.2] MACD 動能正向
+    score += (v_weekly_uptrend > 0).astype(float) * 0.1             # +0.1: [V3.3] 週線多頭排列 (破平用)
+
+    # [V3.4] Minervini + E&M Score 模式加分
+    if minervini_mode == 'score':
+        score += (c_full_minervini > 0).astype(int) * 2               # +2: Minervini 趨勢模板合規
+        score += (c_rs_rank_70 > 0).astype(int)                       # +1: RS Rank > 70
+        score += (c_vol_dry > 0).astype(int)                          # +1: VCP 量縮
+        score += (c_52w_new_high > 0).astype(int)                     # +1: 52 週新高 (E&M)
+
+    # Z-score & HV 正規化信號加分
+    score += ((v_z_score > 1.0) & (v_z_score < 3.0)).astype(int)   # +1: 統計顯著突破 (1~3σ)
+    score += (v_z_score < -2.0).astype(int)                         # +1: 極端超賣 (均值回歸機會)
+    score += (v_hv_compressed > 0).astype(int)                      # +1: 波動率收縮 (蓄勢待發)
 
     # 籌碼面加分
     score += v_inst_streak.astype(int)                             # +1: 法人連續買超
@@ -297,27 +680,185 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     sig_b_only = sig_b & ~sig_a
     score = np.where(sig_b_only, np.minimum(score, 3), score)
 
-    # 構建模擬用的 DataFrame
-    v_pos_long = np.full_like(v_close, np.nan)
-    v_pos_short = np.full_like(v_close, np.nan)
+    # === Track AB: Signal A + B 部位 (統一出場: MA60 跌破) ===
+    v_pos_ab = np.full_like(v_close, np.nan)
+    v_pos_ab[long_exits_ab] = 0                          # Step 1: 出場信號
+    v_pos_ab[long_entries_ab] = score[long_entries_ab]    # Step 2: 進場覆蓋
 
-    # [V3 關鍵] 先寫出場, 再寫進場 → 進場信號優先
-    v_pos_long[long_exits] = 0              # Step 1: 出場信號
-    v_pos_long[long_entries] = score[long_entries]  # Step 2: 進場信號覆蓋
+    df_ab = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
+    df_ab[:] = v_pos_ab
+    df_ab = df_ab.ffill().fillna(0)
 
-    v_pos_short[short_exits] = 0
-    v_pos_short[short_entries] = -0.5
+    # === Track C: Signal C 動能追蹤部位 ===
+    v_pos_c = np.full_like(v_close, np.nan)
+    v_pos_c[exit_c] = 0                                  # Step 1: 動能出場 (MA10/爆量長黑)
+    v_pos_c[sig_c] = score_c[sig_c]                      # Step 2: 動能進場覆蓋
 
-    df_long = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
-    df_short = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
+    df_c = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
+    df_c[:] = v_pos_c
+    df_c = df_c.ffill().fillna(0)
 
-    df_long[:] = v_pos_long
-    df_short[:] = v_pos_short
+    # === [V3.4] Track E: Minervini+E&M 混合部位 (signal_e 模式) ===
+    if minervini_mode == 'signal_e':
+        v_pos_e = np.full_like(v_close, np.nan)
+        v_pos_e[exit_e] = 0
+        v_pos_e[sig_e] = score_e[sig_e]
+        df_e = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
+        df_e[:] = v_pos_e
+        df_e = df_e.ffill().fillna(0)
+    else:
+        df_e = pd.DataFrame(0, index=master_index, columns=close.columns)
 
-    df_long = df_long.ffill().fillna(0)
-    df_short = df_short.ffill().fillna(0)
+    # === Track D: Signal D 空頭部位 - [V3.2 新增] ===
+    v_pos_d = np.full_like(v_close, np.nan)
+    v_pos_d[exit_d] = 0                                    # Step 1: 空頭出場 (回補)
+    v_pos_d[sig_d] = score_d[sig_d]                        # Step 2: 空頭進場 (負值)
 
-    final_pos = df_long + df_short
+    df_d = pd.DataFrame(np.nan, index=master_index, columns=close.columns)
+    df_d[:] = v_pos_d
+    df_d = df_d.ffill().fillna(0)
+
+    # === [V3.2] 多空合併 + Top-N (四軌系統: A + B + C 多頭 + D 空頭) ===
+    MAX_CONCURRENT_LONG = 8     # 多頭最多 8 檔 (從 10 降為 8)
+    MAX_CONCURRENT_SHORT = 2    # 空頭最多 2 檔 (新增)
+    MAX_CONCURRENT_TOTAL = 10   # 總部位不變
+
+    # Step 1: 合併多頭部位 (AB + C + E)
+    long_pos = pd.DataFrame(
+        np.maximum(np.maximum(df_ab.values, df_c.values), df_e.values),
+        index=master_index, columns=close.columns
+    )
+
+    # [實驗] Score 門檻過濾: 只保留 score >= min_score 的部位
+    if _min_score > 0:
+        long_pos[long_pos < _min_score] = 0
+
+    # [實驗] 產業集中度限制: 每產業最多 N 檔
+    if _max_per_industry > 0:
+        try:
+            ind_info = data.get('company_basic_info')
+            if ind_info is not None and '產業類別' in ind_info.columns:
+                stock_industry = ind_info['產業類別']
+            else:
+                stock_industry = pd.Series('Unknown', index=close.columns)
+        except Exception:
+            stock_industry = pd.Series('Unknown', index=close.columns)
+
+        for i in range(len(long_pos)):
+            row = long_pos.iloc[i]
+            active = row[row > 0].sort_values(ascending=False)
+            if len(active) == 0:
+                continue
+            ind_count = {}
+            keep = set()
+            for stock_id in active.index:
+                ind = stock_industry.get(str(stock_id), 'Unknown')
+                ind_count[ind] = ind_count.get(ind, 0) + 1
+                if ind_count[ind] <= _max_per_industry:
+                    keep.add(stock_id)
+            drop = set(active.index) - keep
+            if drop:
+                long_pos.iloc[i, long_pos.columns.isin(drop)] = 0
+
+    # Step 2: 多頭 Top-N 選股 (Top-8)
+    long_rank = long_pos.rank(axis=1, method='first', ascending=False)
+    long_top = (long_rank <= MAX_CONCURRENT_LONG) & (long_pos > 0)
+    long_pos = long_pos.where(long_top, 0)
+
+    # [V3.7] Signal D 轉避險指標: 不做空個股, 用空頭信號數量減倉多頭
+    # 原理: Signal D 選股做空長期虧損, 但作為「市場危險信號」能有效預警
+    short_signal_count = (df_d < 0).sum(axis=1)  # 每天有幾檔觸發空頭信號
+    hedge_factor = pd.Series(1.0, index=master_index)
+    hedge_factor[short_signal_count >= 1] = 0.7   # 1+ 空頭信號 → 多頭減倉 30%
+    hedge_factor[short_signal_count >= 2] = 0.4   # 2+ 空頭信號 → 多頭減倉 60%
+
+    long_hedge_mask = long_pos > 0
+    long_pos[long_hedge_mask] = long_pos[long_hedge_mask].mul(hedge_factor, axis=0)[long_hedge_mask]
+
+    # Step 3: 最終部位 = 純多頭 (不再持有空頭部位)
+    final_pos = long_pos
+
+    # Limit short positions (Signal D) to max 2 concurrent
+    MAX_CONCURRENT_SHORT = 2
+    short_mask = final_pos < 0
+    short_pos_only = final_pos.where(short_mask, 0)
+    short_rank = short_pos_only.abs().rank(axis=1, method='first', ascending=False)
+    short_top = (short_rank <= MAX_CONCURRENT_SHORT) & short_mask
+    final_pos = final_pos.where(~short_mask, 0)  # Zero out all shorts
+    final_pos = final_pos + short_pos_only.where(short_top, 0)  # Add back top shorts
+
+    # [V3.2] 防禦性檢查: NaN/Inf 清理
+    final_pos = final_pos.replace([np.inf, -np.inf], 0).fillna(0)
+
+    # [實驗] 時間停損: 持倉超過 N 天且未獲利 → 出場
+    if _time_stop_days > 0:
+        # 計算每個部位的持續天數 (連續非零)
+        is_holding = (final_pos != 0).astype(int)
+        # 累計持倉天數: 遇到 0 重置
+        hold_days = is_holding.copy().astype(float)
+        for i in range(1, len(hold_days)):
+            mask = is_holding.iloc[i] > 0
+            hold_days.iloc[i, mask] = hold_days.iloc[i-1][mask] + 1
+
+        # 取得持倉期間報酬 (簡易: 當前價 vs N天前價)
+        close_df = close.reindex(final_pos.index).ffill()
+        price_change = close_df / close_df.shift(_time_stop_days) - 1
+        # 持倉超過 N 天且報酬 <= 0 → 強制出場
+        time_stop_mask = (hold_days >= _time_stop_days) & (price_change <= 0)
+        final_pos[time_stop_mask] = 0
+
+    # 信號品質檢查
+    if final_pos.abs().sum().sum() == 0:
+        import logging as _log
+        _log.warning("WARNING: final_pos 全為 0，策略沒有任何信號觸發")
+
+    # --- raw_mode: 返回原始數據供外部資金配置測試 ---
+    if raw_mode:
+        sim_pos = final_pos
+        if sim_start is not None or sim_end is not None:
+            if sim_start and sim_end:
+                sim_pos = final_pos.loc[sim_start:sim_end]
+            elif sim_start:
+                sim_pos = final_pos.loc[sim_start:]
+            elif sim_end:
+                sim_pos = final_pos.loc[:sim_end]
+        return {
+            'final_pos': sim_pos,
+            'close': close,
+            'etf_close': benchmark_close,
+            'trail_stop': _trail_stop,
+            'max_concurrent': MAX_CONCURRENT_TOTAL,
+        }
+
+    # ==========================================
+    # 5.5 Dynamic Exposure 資金配置 (V3.5 WFO 驗證冠軍)
+    # ==========================================
+    # 大盤(0050) > MA60 → 全倉 100%
+    # MA60 > 大盤 > MA120 → 60%
+    # 大盤 < MA120 → 30%
+    # 空頭在熊市反而加碼 (乘以 2-exposure)
+    bench_series = benchmark_close
+    bench_ma60_s = bench_series.rolling(60).mean()
+    bench_ma120_s = bench_series.rolling(120).mean()
+
+    exposure = pd.Series(1.0, index=final_pos.index)
+    bench_aligned = bench_series.reindex(final_pos.index).ffill()
+    bma60_aligned = bench_ma60_s.reindex(final_pos.index).ffill()
+    bma120_aligned = bench_ma120_s.reindex(final_pos.index).ffill()
+
+    exposure[bench_aligned <= bma60_aligned] = 0.6
+    exposure[bench_aligned <= bma120_aligned] = 0.3
+    exposure[bench_aligned > bma60_aligned] = 1.0
+
+    # [V3.6] Score Weight: 高分股多買、低分少買 (score/8, 上限1.5)
+    alloc_pos = final_pos.copy()
+    alloc_pos[alloc_pos > 0] = (alloc_pos[alloc_pos > 0] / 8.0).clip(lower=0.3, upper=1.5)
+
+    # [V3.7] 純多頭策略: 只做多頭 Dynamic Exposure 調整 (不再有空頭加碼)
+    long_mask_alloc = (alloc_pos > 0)
+    alloc_pos[long_mask_alloc] = alloc_pos[long_mask_alloc].mul(exposure, axis=0)[long_mask_alloc]
+
+    final_pos = alloc_pos.replace([np.inf, -np.inf], 0).fillna(0)
 
     # ==========================================
     # 6. 診斷 & 執行回測
@@ -335,33 +876,58 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
     logging.root.setLevel(logging.INFO)
 
     logging.info("=" * 60)
-    logging.info("--- Isaac V3: 準備進入 backtest.sim ---")
+    logging.info(f"--- Isaac V3.7{minervini_mode or ''}: 準備進入 backtest.sim ---")
     logging.info(f"final_pos shape: {final_pos.shape}")
 
     # 信號觸發統計
     sig_a_count = sig_a.sum() if hasattr(sig_a, 'sum') else 0
     sig_b_count = sig_b.sum() if hasattr(sig_b, 'sum') else 0
-    entry_count = long_entries.sum() if hasattr(long_entries, 'sum') else 0
-    exit_count = long_exits.sum() if hasattr(long_exits, 'sum') else 0
-    logging.info(f"Signal A 觸發次數: {sig_a_count}")
-    logging.info(f"Signal B 觸發次數: {sig_b_count}")
-    logging.info(f"進場信號總數: {entry_count}")
-    logging.info(f"出場信號總數: {exit_count}")
+    sig_c_count = sig_c.sum() if hasattr(sig_c, 'sum') else 0
+    sig_d_count = sig_d.sum() if hasattr(sig_d, 'sum') else 0
+    exit_ab_count = long_exits_ab.sum() if hasattr(long_exits_ab, 'sum') else 0
+    exit_count_c = exit_c.sum() if hasattr(exit_c, 'sum') else 0
+    exit_d_count = exit_d.sum() if hasattr(exit_d, 'sum') else 0
+    logging.info(f"Signal A 觸發次數 (成長突破): {sig_a_count}")
+    logging.info(f"Signal B 觸發次數 (均值回歸): {sig_b_count}")
+    logging.info(f"Signal C 觸發次數 (動能追蹤): {sig_c_count}")
+    logging.info(f"Signal D 觸發次數 (熊市放空): {sig_d_count}")
+    logging.info(f"出場信號 AB (MA60): {exit_ab_count}")
+    logging.info(f"出場信號 C (MA10/爆量長黑): {exit_count_c}")
+    logging.info(f"出場信號 D (MA20回復/RSI<25/爆量長紅/市場轉多): {exit_d_count}")
 
     non_zero_days = (final_pos.abs().sum(axis=1) > 0).sum()
+    long_days = (final_pos > 0).any(axis=1).sum()
+    hedge_active_days = (hedge_factor < 1.0).sum() if 'hedge_factor' in dir() else 0
     logging.info(f"有持倉的天數: {non_zero_days} / {len(final_pos)}")
+    logging.info(f"有多頭持倉天數: {long_days}")
+    logging.info(f"空頭避險啟動天數: {hedge_active_days}")
 
     # 各條件診斷
     conditions_debug = {
         'v_bullish': v_bullish.sum(),
         'c_trend': c_trend.sum(),
         'c_breakout': c_breakout.sum(),
+        'c_hv_ok (HV正常區間)': c_hv_ok.sum(),
         'v_liq': v_liq.sum(),
         'c_safe_supply': c_safe_supply.sum(),
         'v_etf_ok': v_etf_ok.sum(),
         'c_oversold': c_oversold.sum(),
         'c_rsi_panic': c_rsi_panic.sum(),
         'c_hammer': c_hammer.sum(),
+        'c_rs_short (20日RS)': c_rs_short.sum(),
+        'c_above_ma20 (月線之上)': c_above_ma20.sum(),
+        'c_rev_momentum (3月營收動能)': c_rev_momentum.sum(),
+        'c_macd_positive (MACD多頭)': (v_macd_hist > 0).sum(),
+        'exit_c1 (跌破MA10)': exit_c1.sum(),
+        'exit_c2 (爆量長黑)': exit_c2.sum(),
+        'v_bearish (空頭市場)': v_bearish.sum(),
+        'c_d_trend_down (空頭排列)': c_d_trend_down.sum(),
+        'c_d_breakdown (破20日低帶量)': c_d_breakdown.sum(),
+        'c_d_deep_bear (低於MA120)': c_d_deep_bear.sum(),
+        'c_d_macd_bearish (MACD空頭)': c_d_macd_bearish.sum(),
+        'z_score>1 (統計突破)': (v_z_score > 1.0).sum(),
+        'z_score<-2 (極端超賣)': (v_z_score < -2.0).sum(),
+        'hv_compressed (波動收縮)': (v_hv_compressed > 0).sum(),
     }
     logging.info("--- 各條件觸發統計 ---")
     for cond_name, cond_count in conditions_debug.items():
@@ -371,19 +937,32 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
         from data.provider import safe_finlab_sim
 
         sim_kwargs = {
-            'resample': 'D',
-            'name': 'Isaac V3',
+            # [V3.3 修正] 移除 resample='D'：
+            # resample='D' 導致 FinLab 將每天視為獨立交易 → 所有持有天數都顯示 1
+            # 不設 resample 時，FinLab 根據 position 值的實際變化來判斷交易進出場
+            'name': f'Isaac V3.7{minervini_mode or ""}',
             'upload': False,
-            'trail_stop': 0.15,
-            'position_limit': 0.20,
-            'touched_exit': True,
+            'trail_stop': _trail_stop,
+            'position_limit': 1.0 / MAX_CONCURRENT_TOTAL,  # 每檔上限 = 1/N (10檔→10%)
+            'touched_exit': False,
         }
         if stop_loss is not None:
             sim_kwargs['stop_loss'] = stop_loss
         if take_profit is not None:
             sim_kwargs['take_profit'] = take_profit
 
-        report = safe_finlab_sim(final_pos, **sim_kwargs)
+        # WFO 窗口: 用 position 切片實現日期範圍限制
+        sim_pos = final_pos
+        if sim_start is not None or sim_end is not None:
+            if sim_start and sim_end:
+                sim_pos = final_pos.loc[sim_start:sim_end]
+            elif sim_start:
+                sim_pos = final_pos.loc[sim_start:]
+            elif sim_end:
+                sim_pos = final_pos.loc[:sim_end]
+            logging.info(f"WFO 窗口切片: {sim_pos.index[0]} ~ {sim_pos.index[-1]} ({len(sim_pos)} 天)")
+
+        report = safe_finlab_sim(sim_pos, **sim_kwargs)
 
         # 回測後診斷
         try:
@@ -394,10 +973,50 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None):
                 logging.info(f"  cagr = {stats.get('cagr', 'MISSING')}")
                 logging.info(f"  max_drawdown = {stats.get('max_drawdown', 'MISSING')}")
                 logging.info(f"  win_ratio = {stats.get('win_ratio', 'MISSING')}")
+
+            # === Yearly Trade Statistics ===
+            if len(trades) > 0 and 'entry_date' in trades.columns:
+                trades_copy = trades.copy()
+                trades_copy['year'] = pd.to_datetime(trades_copy['entry_date']).dt.year
+                years = sorted(trades_copy['year'].unique())
+
+                first_year = years[0] if years else 0
+                last_year = years[-1] if years else 0
+                header = f"===== Yearly Trade Statistics ({first_year}~{last_year}) ====="
+                logging.info(header)
+                print(header)
+
+                fmt_header = (f"{'Year':>6} | {'Trades':>6}   | {'AvgRet':>10} | {'MedRet':>10} | "
+                              f"{'WinRate':>10} | {'MAE':>10} | {'MFE':>10}")
+                logging.info(fmt_header)
+                print(fmt_header)
+
+                for yr in years:
+                    yr_trades = trades_copy[trades_copy['year'] == yr]
+                    n = len(yr_trades)
+                    if n == 0:
+                        continue
+
+                    ret_col = 'return' if 'return' in yr_trades.columns else None
+                    mae_col = 'mae' if 'mae' in yr_trades.columns else None
+                    # MFE: 使用 gmfe (gross MFE)
+                    mfe_col = 'gmfe' if 'gmfe' in yr_trades.columns else ('bmfe' if 'bmfe' in yr_trades.columns else None)
+
+                    avg_ret = yr_trades[ret_col].mean() * 100 if ret_col else float('nan')
+                    med_ret = yr_trades[ret_col].median() * 100 if ret_col else float('nan')
+                    win_rate = (yr_trades[ret_col] > 0).mean() * 100 if ret_col else float('nan')
+                    mae_val = yr_trades[mae_col].mean() * 100 if mae_col else float('nan')
+                    mfe_val = yr_trades[mfe_col].mean() * 100 if mfe_col else float('nan')
+
+                    line = (f"{yr:>6} | Trades: {n:>4} | AvgRet: {avg_ret:>7.2f}% | MedRet: {med_ret:>7.2f}% | "
+                            f"WinRate: {win_rate:>6.2f}% | MAE: {mae_val:>7.2f}% | MFE: {mfe_val:>7.2f}%")
+                    logging.info(line)
+                    print(line)
+
         except Exception as diag_e:
             logging.warning(f"診斷失敗: {diag_e}")
 
-        logging.info("Isaac V3 backtest.sim 執行成功")
+        logging.info(f"Isaac V3.7{minervini_mode or ''} backtest.sim 執行成功")
         return report
 
     except Exception as e:

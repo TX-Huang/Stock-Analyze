@@ -8,3 +8,5 @@ scipy
 google-genai
 graphviz
 requests
+shioaji
+python-dateutil

@@ -28,7 +28,7 @@ def render_backtest_dashboard(report, strategy_name="custom"):
     avg_hold_win = trades[trades['return'] > 0]['period'].mean() if not trades.empty else 0
     avg_hold_loss = trades[trades['return'] <= 0]['period'].mean() if not trades.empty else 0
 
-    exposure = (equity != equity.shift(1)).mean() if equity is not None else 0
+    exposure = stats.get('exposure', (equity != equity.shift(1)).mean() if equity is not None else 0)
 
     tab1, tab2, tab3 = st.tabs(["📊 實戰戰情室 (Metrics)", "📈 資金曲線 (Chart)", "📋 交易明細 (Log)"])
 
@@ -92,14 +92,13 @@ def render_backtest_dashboard(report, strategy_name="custom"):
             except Exception:
                 today = datetime.now()
 
-            def calculate_holding(row):
-                if pd.notna(row.get('出場日期')):
-                    return (row['出場日期'] - row['進場日期']).days + 1
-                elif pd.notna(row.get('進場日期')):
-                    return (today - row['進場日期']).days + 1
-                return row.get('持有天數', 0)
-
-            trades_display['持有天數'] = trades_display.apply(calculate_holding, axis=1)
+            # 向量化計算持有天數
+            if '出場日期' in trades_display.columns and '進場日期' in trades_display.columns:
+                has_exit = pd.notna(trades_display['出場日期'])
+                has_entry = pd.notna(trades_display['進場日期'])
+                trades_display.loc[has_exit, '持有天數'] = (trades_display.loc[has_exit, '出場日期'] - trades_display.loc[has_exit, '進場日期']).dt.days + 1
+                trades_display.loc[~has_exit & has_entry, '持有天數'] = (today - trades_display.loc[~has_exit & has_entry, '進場日期']).dt.days + 1
+                trades_display['持有天數'] = trades_display['持有天數'].fillna(0).astype(int)
 
             trades_filtered = trades_display
 

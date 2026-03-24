@@ -19,7 +19,7 @@ def run_vcp_strategy(api_token):
     try:
         benchmark = data.get('price:收盤價')['0050']
         market_ret = benchmark.pct_change(120)
-    except:
+    except Exception:
         # Fallback: Assume flat market if benchmark missing
         market_ret = pd.Series(0, index=close.index)
 
@@ -71,15 +71,15 @@ def run_vcp_strategy(api_token):
     # --- Advanced Conditions (Fundamental, Technical, Chip) ---
     try:
         rev_growth = data.get('monthly_revenue:去年同月增減(%)')
-        cond_rev = (rev_growth > 30).reindex(close.index, method='ffill').fillna(False)
-    except: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
+        cond_rev = (rev_growth > 30).reindex(close.index).ffill().fillna(False)
+    except Exception: cond_rev = pd.DataFrame(False, index=close.index, columns=close.columns)
 
     try:
         open_price = data.get('price:開盤價')
         body = (close - open_price).abs()
         lower_shadow = (open_price.combine(close, min) - low)
         cond_shadow = (close > open_price) & (lower_shadow > body * 2)
-    except:
+    except Exception:
         cond_shadow = pd.DataFrame(False, index=close.index, columns=close.columns)
 
     # Institutional Lock-in (Smart Money)
@@ -90,7 +90,7 @@ def run_vcp_strategy(api_token):
 
         cond_chip_spike = (foreign_buy + trust_buy) > 0
         is_inst_locked_in = inst_net_buy_10d > 0
-    except:
+    except Exception:
         cond_chip_spike = pd.DataFrame(False, index=close.index, columns=close.columns)
         is_inst_locked_in = pd.DataFrame(False, index=close.index, columns=close.columns)
 
@@ -121,7 +121,7 @@ def run_vcp_strategy(api_token):
 
     import logging
     import os
-    from data_provider import safe_finlab_sim
+    from data.provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
         report = safe_finlab_sim(position, resample='D', name='VCP 波動收縮策略', upload=False)

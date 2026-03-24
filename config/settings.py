@@ -1,4 +1,4 @@
-GEMINI_MODEL = 'gemini-2.0-flash'
+GEMINI_MODEL = 'gemini-3.1-pro-preview'
 
 DEFAULT_CHART_SETTINGS = {
     "trendline": True, "support": True, "gaps": True, "log_scale": False,
@@ -6,6 +6,7 @@ DEFAULT_CHART_SETTINGS = {
     "patterns": True, "ghost_lines": True,
     "volume_strict": True,
     "rounding": True, "fan": True, "wedge": True, "broadening": True,
-    "diamond": True, "bbands": True, "macd": True, "kd": True,
-    "structure": True
+    "diamond": True, "bbands": False, "macd": True, "kd": True,
+    "structure": True,
+    "ma": True, "candle_patterns": True,
 }

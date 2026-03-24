@@ -3,10 +3,16 @@ import numpy as np
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    # Handle division by zero: loss=0 → RSI=100, gain=0 → RSI=0
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    # When loss=0 and gain>0 → RSI=100; when both=0 → RSI=50
+    import pandas as pd
+    fill_values = pd.Series(np.where(gain > 0, 100, 50), index=rsi.index)
+    rsi = rsi.fillna(fill_values)
+    return rsi
 
 
 def calculate_macd(df, fast=12, slow=26, signal=9):
@@ -29,7 +35,9 @@ def calculate_bbands(df, length=20, std=2):
 def calculate_stoch(df, k_window=14, d_window=3):
     low_min = df['Low'].rolling(window=k_window).min()
     high_max = df['High'].rolling(window=k_window).max()
-    k = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+    denom = (high_max - low_min).replace(0, np.nan)
+    k = 100 * ((df['Close'] - low_min) / denom)
+    k = k.fillna(50)
     d = k.rolling(window=d_window).mean()
     return k, d
 

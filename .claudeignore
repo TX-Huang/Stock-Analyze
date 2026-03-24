@@ -1,0 +1,36 @@
+# Embedded Python runtime (very large, not relevant to code changes)
+python_embed/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Git internals
+.git/
+
+# Pip installer (2MB+, not needed)
+get-pip.py
+
+# Data / Cache directories
+new_vip_db/
+.finlab/
+output/
+logs/
+
+# Log files
+*.log
+finlab_debug.log
+
+# Environment & secrets
+.env
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/

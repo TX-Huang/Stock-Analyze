@@ -20,7 +20,7 @@ def safe_finlab_data_get(dataset_name: str, force_download=False):
             try:
                 # Some versions of FinLab have this
                 data.clear_cache()
-            except:
+            except Exception:
                 pass
 
             # Delete physical cache directory locally if it exists. Usually ~/.finlab/ or ./data

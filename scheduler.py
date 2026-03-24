@@ -1,0 +1,220 @@
+"""
+突破偵測排程器 — 獨立於 Streamlit 運行
+
+啟動方式:
+  python scheduler.py                    # 前景執行 (Ctrl+C 停止)
+  python scheduler.py --once             # 只掃描一次
+  python scheduler.py --interval 15      # 每 15 分鐘掃描一次 (預設 30)
+  python scheduler.py --notify           # 有信號時發 Telegram 通知
+
+也可透過 Windows 工作排程器設定自動執行。
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import logging
+from datetime import datetime, timezone, timedelta
+
+# 確保 project root 在 path 中
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from data.provider import get_data_provider
+from data.watchlist import WatchlistManager
+from analysis.breakout import scan_breakouts, format_scan_results_for_telegram
+
+from config.paths import SCAN_RESULTS_PATH, PAPER_TRADE_PATH
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+TW_TZ = timezone(timedelta(hours=8))
+
+logger = logging.getLogger(__name__)
+
+
+def _get_portfolio_tickers():
+    """從 paper_trade.json 取得目前持倉的股票清單。"""
+    if not os.path.exists(PAPER_TRADE_PATH):
+        return []
+    try:
+        with open(PAPER_TRADE_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        positions = data.get('positions', [])
+        return [
+            {
+                'ticker': p['ticker'],
+                'name': p.get('name', p['ticker']),
+                'source': 'portfolio'
+            }
+            for p in positions if p.get('ticker')
+        ]
+    except Exception as e:
+        logger.warning(f"讀取持倉失敗: {e}")
+        return []
+
+
+def _get_watchlist_tickers():
+    """從 watchlist.json 取得自選股清單。"""
+    try:
+        wm = WatchlistManager()
+        stocks = wm.get_all()
+        return [
+            {
+                'ticker': s['ticker'],
+                'name': s.get('name', s['ticker']),
+                'source': 'watchlist'
+            }
+            for s in stocks if s.get('ticker')
+        ]
+    except Exception as e:
+        logger.warning(f"讀取自選股失敗: {e}")
+        return []
+
+
+def _merge_tickers(watchlist, portfolio):
+    """合併並去重。"""
+    seen = set()
+    merged = []
+    for item in watchlist + portfolio:
+        t = item['ticker']
+        if t not in seen:
+            seen.add(t)
+            merged.append(item)
+        else:
+            # 如果兩邊都有，標記 source
+            for m in merged:
+                if m['ticker'] == t and m['source'] != item['source']:
+                    m['source'] = 'both'
+    return merged
+
+
+def _is_market_hours():
+    """判斷是否在台股交易時段 (09:00 - 13:30 週一~五)。"""
+    now = datetime.now(TW_TZ)
+    if now.weekday() >= 5:  # 週六日
+        return False
+    hour_min = now.hour * 100 + now.minute
+    return 850 <= hour_min <= 1335  # 8:50 ~ 13:35 (含盤前盤後緩衝)
+
+
+def run_scan(notify=False, force=False):
+    """
+    執行一次完整掃描。
+
+    Args:
+        notify: 是否發送 Telegram 通知
+        force: 是否強制執行（忽略交易時段限制）
+
+    Returns:
+        list: scan results
+    """
+    if not force and not _is_market_hours():
+        logger.info("非交易時段，跳過掃描。使用 --force 可強制執行。")
+        return []
+
+    logger.info("=" * 50)
+    logger.info("開始突破偵測掃描...")
+
+    # 1. 收集股票清單
+    watchlist = _get_watchlist_tickers()
+    portfolio = _get_portfolio_tickers()
+    tickers = _merge_tickers(watchlist, portfolio)
+
+    if not tickers:
+        logger.warning("自選股和持倉皆為空，無標的可掃描。")
+        return []
+
+    logger.info(f"掃描標的: {len(tickers)} 檔 "
+                f"(自選股 {len(watchlist)}, 持倉 {len(portfolio)})")
+
+    # 2. 建立 provider
+    provider = get_data_provider("yfinance", market_type="TW")
+
+    # 3. 執行掃描
+    results = scan_breakouts(tickers, provider, period="6mo")
+
+    signals_count = len([r for r in results if r['signal'] is not None])
+    critical_count = len([r for r in results if r.get('signal_info', {}).get('level') == 'critical'])
+
+    logger.info(f"掃描完成: {len(results)} 檔完成, "
+                f"{signals_count} 檔有信號, "
+                f"{critical_count} 檔重大信號")
+
+    # 4. 儲存結果
+    scan_data = {
+        'scan_time': datetime.now(TW_TZ).isoformat(),
+        'total_scanned': len(tickers),
+        'signals_count': signals_count,
+        'critical_count': critical_count,
+        'results': results,
+    }
+
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(SCAN_RESULTS_PATH), suffix='.tmp')
+    with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+        json.dump(scan_data, f, ensure_ascii=False, indent=2, default=str)
+    os.replace(tmp_path, SCAN_RESULTS_PATH)
+
+    logger.info(f"結果已儲存: {SCAN_RESULTS_PATH}")
+
+    # 5. Telegram 通知 (只推送有信號的)
+    if notify and signals_count > 0:
+        try:
+            from utils.notify import send_telegram
+            msg = format_scan_results_for_telegram(results)
+            send_telegram(msg, parse_mode=None)  # 用純文字，避免 markdown 問題
+            logger.info("Telegram 通知已發送")
+        except Exception as e:
+            logger.error(f"Telegram 發送失敗: {e}")
+
+    # 6. 打印摘要
+    for r in results:
+        if r['signal']:
+            info = r['signal_info']
+            logger.info(
+                f"  {info['icon']} {r['name']} ({r['ticker']}): "
+                f"{info['label']} | 價: {r['price']:,.1f} | "
+                f"量比: {r['volume_ratio']:.1f}x"
+            )
+
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description='突破偵測排程器')
+    parser.add_argument('--once', action='store_true', help='只掃描一次')
+    parser.add_argument('--interval', type=int, default=30, help='掃描間隔(分鐘)')
+    parser.add_argument('--notify', action='store_true', help='發送 Telegram 通知')
+    parser.add_argument('--force', action='store_true', help='強制執行(忽略交易時段)')
+    args = parser.parse_args()
+
+    logger.info(f"突破偵測排程器啟動")
+    logger.info(f"  模式: {'單次' if args.once else f'循環 (每 {args.interval} 分鐘)'}")
+    logger.info(f"  通知: {'開啟' if args.notify else '關閉'}")
+    logger.info(f"  時段: {'強制執行' if args.force else '僅交易時段'}")
+
+    if args.once:
+        run_scan(notify=args.notify, force=args.force)
+        return
+
+    # 循環模式
+    try:
+        while True:
+            try:
+                run_scan(notify=args.notify, force=args.force)
+            except Exception as e:
+                logger.error(f"Scan failed: {e}", exc_info=True)
+            logger.info(f"下次掃描: {args.interval} 分鐘後")
+            time.sleep(args.interval * 60)
+    except KeyboardInterrupt:
+        logger.info("排程器已停止 (Ctrl+C)")
+
+
+if __name__ == '__main__':
+    main()
