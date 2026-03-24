@@ -5,6 +5,8 @@ import numpy as np
 import finlab
 import logging
 
+pd.set_option('future.no_silent_downcasting', True)
+
 logger = logging.getLogger(__name__)
 
 # ==========================================
