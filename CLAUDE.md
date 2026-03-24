@@ -161,6 +161,14 @@ msg = format_backtest_report(stats, trades, version="V3.3")
 send_telegram(msg)
 ```
 
+## gstack
+
+Use the `/browse` skill from gstack for all web browsing, never use `mcp__claude-in-chrome__*` tools.
+
+Available skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/cso`, `/autoplan`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`.
+
+If gstack skills aren't working, run `cd .claude/skills/gstack && ./setup` to build the binary and register skills.
+
 ## 開發慣例
 - 所有文件使用 UTF-8 編碼
 - UI 文字使用繁體中文
