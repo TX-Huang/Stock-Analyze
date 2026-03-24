@@ -115,20 +115,21 @@ def render(client, market_mode, strategy_mode, tf_code, is_weekly, _embedded=Fal
             border_color = '#f59e0b'
         details_html = ""
         if verdict.get('details'):
-            details_html = "<hr style='border-color:#334155;margin:8px 0'>"
-            details_html += "".join(f"<div style='font-size:0.75rem;color:#94a3b8'>• {d}</div>" for d in verdict.get('details'))
+            details_html = '<hr style="border-color:#334155;margin:8px 0">'
+            details_html += "".join(f'<div style="font-size:0.75rem;color:#94a3b8">• {d}</div>' for d in verdict.get('details'))
         signal_ctx = data.get('signal_context', '無')
-        st.markdown(f"""
-        <div class="alert-card" style="border-color:{border_color};padding:14px 18px">
-            <div class="alert-title" style="color:{border_color}">⚖️ 程式判決：{trend_val}</div>
-            <div class="alert-body" style="margin-top:6px">
-                <strong>訊號</strong>：{verdict.get('signal')}
-                {details_html}
-                <hr style='border-color:#334155;margin:8px 0'>
-                <strong>深度掃描</strong>：{signal_ctx}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        signal_val = verdict.get('signal', '')
+        verdict_html = (
+            f'<div class="alert-card" style="border-color:{border_color};padding:14px 18px">'
+            f'<div class="alert-title" style="color:{border_color}">⚖️ 程式判決：{trend_val}</div>'
+            f'<div class="alert-body" style="margin-top:6px">'
+            f'<strong>訊號</strong>：{signal_val}'
+            f'{details_html}'
+            f'<hr style="border-color:#334155;margin:8px 0">'
+            f'<strong>深度掃描</strong>：{signal_ctx}'
+            f'</div></div>'
+        )
+        st.markdown(verdict_html, unsafe_allow_html=True)
         render_trend_chart(data['df'], patterns, st.session_state.market_mode,
                           is_box=verdict.get('is_box', False), height=900, is_weekly=is_weekly,
                           candle_patterns=data.get('candle_patterns', []))
