@@ -22,6 +22,7 @@ Candlestick Pattern Strategy (陰線陽線型態策略) - 獨立測試版
 from finlab import data
 from finlab import backtest
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
 import numpy as np
 import finlab
 

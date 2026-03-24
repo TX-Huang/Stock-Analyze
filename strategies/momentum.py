@@ -23,6 +23,7 @@ Momentum Trading Strategy (動能追蹤策略) - 獨立版本
 from finlab import data
 from finlab import backtest
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
 import numpy as np
 import finlab
 
@@ -122,8 +123,8 @@ def run_momentum_strategy(api_token, stop_loss=None, take_profit=None):
     bench_ma60 = benchmark_close.rolling(60).mean()
 
     # 短期相對強弱 (20 日報酬率 vs 大盤)
-    stock_ret_20 = close.pct_change(20)
-    bench_ret_20 = benchmark_close.pct_change(20)
+    stock_ret_20 = close.pct_change(20, fill_method=None)
+    bench_ret_20 = benchmark_close.pct_change(20, fill_method=None)
     rs_short_20 = stock_ret_20.sub(bench_ret_20, axis=0) > 0
 
     # 營收動能: 連續 2 個月營收 YoY > 15% (比3個月>20%更寬鬆)

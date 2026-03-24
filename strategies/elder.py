@@ -25,6 +25,7 @@ MAX_CONCURRENT = 10, position_limit = 0.10
 from finlab import data
 from finlab import backtest
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
 import numpy as np
 import finlab
 

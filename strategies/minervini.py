@@ -25,6 +25,7 @@ MAX_CONCURRENT = 10, position_limit = 0.10
 from finlab import data
 from finlab import backtest
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
 import numpy as np
 import finlab
 
@@ -123,7 +124,7 @@ def run_minervini_strategy(api_token, stop_loss=None, take_profit=None):
     vcp_dryup = vol_dryup_flag.rolling(10).max() > 0
 
     # Relative Strength rank (120-day return percentile rank)
-    stock_ret_120 = close.pct_change(120)
+    stock_ret_120 = close.pct_change(120, fill_method=None)
     rs_rank = stock_ret_120.rank(axis=1, pct=True) * 100
 
     # EPS trailing 4Q sum

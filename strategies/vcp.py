@@ -1,6 +1,7 @@
 from finlab import data
 from finlab import backtest
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
 import numpy as np
 import finlab
 
@@ -18,7 +19,7 @@ def run_vcp_strategy(api_token):
 
     try:
         benchmark = data.get('price:收盤價')['0050']
-        market_ret = benchmark.pct_change(120)
+        market_ret = benchmark.pct_change(120, fill_method=None)
     except Exception:
         # Fallback: Assume flat market if benchmark missing
         market_ret = pd.Series(0, index=close.index)
@@ -62,7 +63,7 @@ def run_vcp_strategy(api_token):
     is_higher_low = low_recent > low_past
 
     # 7. Relative Strength
-    stock_ret = close.pct_change(120)
+    stock_ret = close.pct_change(120, fill_method=None)
     rs_rating = stock_ret.sub(market_ret, axis=0) > 0
 
     # 8. Liquidity Filter
