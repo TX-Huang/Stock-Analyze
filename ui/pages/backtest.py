@@ -227,9 +227,9 @@ def render(_embedded=False):
         has_comparison = len(st.session_state.backtest_results) >= 2
 
         if has_comparison:
-            tab1, tab_cmp, tab2, tab3, tab_cost, tab_mc = st.tabs(["📊 核心績效", "⚔️ 策略比較", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "🎲 統計驗證"])
+            tab1, tab_cmp, tab2, tab3, tab_cost, tab_log, tab_mc = st.tabs(["📊 核心績效", "⚔️ 策略比較", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "📓 回測日誌", "🎲 統計驗證"])
         else:
-            tab1, tab2, tab3, tab_cost, tab_mc = st.tabs(["📊 核心績效", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "🎲 統計驗證"])
+            tab1, tab2, tab3, tab_cost, tab_log, tab_mc = st.tabs(["📊 核心績效", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "📓 回測日誌", "🎲 統計驗證"])
 
         # ------ TAB: Core Performance ------
         with tab1:
@@ -520,6 +520,83 @@ def render(_embedded=False):
             except Exception as e:
                 st.error(f"交易成本分析失敗: {e}")
                 import traceback; logging.error(traceback.format_exc())
+
+        # ------ TAB: Backtest Log ------
+        with tab_log:
+            st.markdown('<p class="sec-header">回測決策日誌</p>', unsafe_allow_html=True)
+            st.caption("回測日誌記錄進出場決策，供策略調整參考。可匯出 JSON 做進一步分析。")
+
+            if not trades.empty:
+                try:
+                    from analysis.backtest_logger import BacktestLogger, render_backtest_log_summary
+
+                    # 從交易明細重建回測日誌
+                    strategy_name = st.session_state.current_strategy or "unknown"
+                    bt_logger = BacktestLogger(strategy_name)
+
+                    for _, row in trades.iterrows():
+                        ticker = str(row.get('stock_id', ''))
+                        entry_date = str(row.get('entry_date', ''))
+                        exit_date = str(row.get('exit_date', ''))
+                        entry_price = float(row.get('entry_price', 0)) if pd.notna(row.get('entry_price')) else 0
+                        exit_price = float(row.get('exit_price', 0)) if pd.notna(row.get('exit_price')) else 0
+                        ret = float(row.get('return', 0)) if pd.notna(row.get('return')) else 0
+                        period = int(row.get('period', 0)) if pd.notna(row.get('period')) else 0
+
+                        # 根據報酬率推斷信號類型
+                        if ret > 0.15:
+                            signal_type = "A"
+                        elif ret > 0.05:
+                            signal_type = "B"
+                        elif ret > 0:
+                            signal_type = "C"
+                        else:
+                            signal_type = "D"
+
+                        # 推斷出場類型
+                        if ret <= -0.08:
+                            exit_type = "trail_stop"
+                        elif period > 60:
+                            exit_type = "time_stop"
+                        elif ret > 0:
+                            exit_type = "signal_d"
+                        else:
+                            exit_type = "ma_break"
+
+                        bt_logger.log_entry(entry_date, ticker, signal_type, abs(ret) * 10, entry_price)
+                        bt_logger.log_exit(exit_date, ticker, exit_type, exit_price, ret * 100, period)
+
+                    # 顯示摘要
+                    summary = bt_logger.get_summary()
+                    md_text = render_backtest_log_summary(summary)
+                    st.markdown(md_text)
+
+                    # 匯出按鈕
+                    col_save, col_dl = st.columns(2)
+                    with col_save:
+                        if st.button("💾 儲存回測日誌", key="save_bt_log"):
+                            filepath = bt_logger.save()
+                            st.success(f"已儲存: {filepath}")
+                    with col_dl:
+                        import json
+                        log_json = json.dumps({
+                            "strategy_name": summary.get("strategy_name", ""),
+                            "summary": summary,
+                            "entries": bt_logger.entries[:50],
+                            "exits": bt_logger.exits[:50],
+                        }, ensure_ascii=False, indent=2)
+                        st.download_button(
+                            "📥 下載日誌 (.json)",
+                            data=log_json.encode('utf-8'),
+                            file_name=f'backtest_log_{time.strftime("%Y%m%d_%H%M")}.json',
+                            mime='application/json',
+                        )
+
+                except Exception as e:
+                    st.error(f"回測日誌建置失敗: {e}")
+                    import traceback; logging.error(traceback.format_exc())
+            else:
+                st.info("無交易紀錄，無法產生回測日誌")
 
         # ------ TAB: Monte Carlo Statistical Validation ------
         with tab_mc:

@@ -22,6 +22,10 @@ def _is_tw_ticker(ticker: str) -> bool:
 def _fetch_price_data(ticker: str):
     """Fetch latest price and compute RSI for a single ticker."""
     try:
+        # 若 ticker 是中文名稱（非代碼），跳過抓取
+        if not re.match(r'^[\dA-Za-z.\-\^]+$', str(ticker).strip()):
+            return None
+
         market = "TW" if _is_tw_ticker(ticker) else "US"
         provider = get_data_provider("auto", market_type=market)
         df = provider.get_historical_data(ticker, period="3mo", interval="1d")
@@ -151,22 +155,22 @@ def render(_embedded=False):
     # --- Batch fetch all price data with cyber_spinner ---
     all_tickers = tuple(s["ticker"] for s in stocks)
 
-    # Check if any data is uncached (needs fetching)
-    _needs_fetch = False
-    for t in all_tickers:
-        if _fetch_price_data(t) is None:
-            # Could be genuinely no data, or first load — either way we show spinner on first batch
-            pass
-    # Use session key to track initial load
+    # 每次載入頁面時都嘗試抓取資料（st.cache_data TTL 控制頻率）
     _wl_cache_key = f"_wl_loaded_{hash(all_tickers)}"
     if _wl_cache_key not in st.session_state:
         with cyber_spinner("LOADING", f"自選股報價載入中... ({len(stocks)} 檔)"):
             price_cache = {}
             for t in all_tickers:
                 price_cache[t] = _fetch_price_data(t)
-        st.session_state[_wl_cache_key] = True
+        st.session_state[_wl_cache_key] = price_cache
     else:
-        price_cache = {t: _fetch_price_data(t) for t in all_tickers}
+        # 使用快取但也更新 (st.cache_data TTL 保護)
+        price_cache = st.session_state[_wl_cache_key]
+        # 嘗試更新缺失資料
+        for t in all_tickers:
+            if t not in price_cache or price_cache[t] is None:
+                price_cache[t] = _fetch_price_data(t)
+        st.session_state[_wl_cache_key] = price_cache
 
     # --- Refresh button ---
     col_title, col_refresh = st.columns([6, 2])
@@ -175,7 +179,10 @@ def render(_embedded=False):
     with col_refresh:
         if st.button("🔄 刷新報價", use_container_width=True, key="wl_refresh"):
             _fetch_price_data.clear()
-            st.session_state.pop(_wl_cache_key, None)
+            # 清除所有 watchlist 快取
+            keys_to_remove = [k for k in st.session_state if str(k).startswith("_wl_loaded_")]
+            for k in keys_to_remove:
+                st.session_state.pop(k, None)
             st.rerun()
 
     headers = ["代碼", "名稱", "現價", "漲跌%", "成交量", "RSI", "趨勢", "群組"]

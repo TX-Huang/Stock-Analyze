@@ -113,20 +113,26 @@ def render(client, market_mode, strategy_mode, tf_code, is_weekly, _embedded=Fal
             border_color = '#22c55e'
         else:
             border_color = '#f59e0b'
+        # --- Verdict HTML (防止特殊字元破壞 HTML 結構) ---
+        import html as _html
         details_html = ""
         if verdict.get('details'):
-            details_html = '<hr style="border-color:#334155;margin:8px 0">'
-            details_html += "".join(f'<div style="font-size:0.75rem;color:#94a3b8">• {d}</div>' for d in verdict.get('details'))
-        signal_ctx = data.get('signal_context', '無')
-        signal_val = verdict.get('signal', '')
+            details_items = "".join(
+                f'<div style="font-size:0.75rem;color:#94a3b8">&bull; {_html.escape(str(d))}</div>'
+                for d in verdict.get('details')
+            )
+            details_html = f'<hr style="border-color:#334155;margin:8px 0">{details_items}'
+        signal_ctx = _html.escape(str(data.get('signal_context', '無')))
+        signal_val = _html.escape(str(verdict.get('signal', '')))
         verdict_html = (
             f'<div class="alert-card" style="border-color:{border_color};padding:14px 18px">'
-            f'<div class="alert-title" style="color:{border_color}">⚖️ 程式判決：{trend_val}</div>'
+            f'<div class="alert-title" style="color:{border_color}">'
+            f'&#9878; \u7a0b\u5f0f\u5224\u6c7a\uff1a{_html.escape(str(trend_val))}</div>'
             f'<div class="alert-body" style="margin-top:6px">'
-            f'<strong>訊號</strong>：{signal_val}'
+            f'<div style="margin-bottom:6px"><b>\u8a0a\u865f</b>\uff1a{signal_val}</div>'
             f'{details_html}'
             f'<hr style="border-color:#334155;margin:8px 0">'
-            f'<strong>深度掃描</strong>：{signal_ctx}'
+            f'<div><b>\u6df1\u5ea6\u638d\u63cf</b>\uff1a{signal_ctx}</div>'
             f'</div></div>'
         )
         st.markdown(verdict_html, unsafe_allow_html=True)

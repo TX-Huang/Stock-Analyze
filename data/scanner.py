@@ -50,7 +50,8 @@ def scan_single_stock_deep(market, ticker, strategy, timeframe="1d", user_query_
         final_full_t = info_data.get('raw_ticker', ticker)
 
         close = df['Close'].iloc[-1]
-        chg = ((close - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
+        prev_close = df['Close'].iloc[-2] if len(df) >= 2 else close
+        chg = ((close - prev_close) / prev_close * 100) if prev_close != 0 else 0.0
         vol_curr = df['Volume'].iloc[-1]
         vol_avg = df['Volume'].iloc[-21:-1].mean() if len(df) >= 22 else df['Volume'].iloc[:-1].mean()
         r_vol = vol_curr / vol_avg if vol_avg > 0 else 0

@@ -147,7 +147,7 @@ def calculate_trend_logic(df, n=10, is_weekly=False):
 
     recent = df.tail(40)
     r_max, r_min = recent['High'].max(), recent['Low'].min()
-    if (r_max - r_min) / r_min < 0.10:
+    if r_min > 0 and (r_max - r_min) / r_min < 0.10:
         verdict["trend"] = "矩形整理"
         verdict["color"] = "blue"
         verdict["is_box"] = True

@@ -40,9 +40,12 @@ def _get_price_ttl():
 
 
 def _fetch_prices_batch(tickers_tuple):
+    """即時報價：SinoPac 快照優先 → YFinance 歷史備援。"""
     from data.provider import get_data_provider, SinoPacProvider
     prices = {}
-    source_label = "YFinance"
+    source_label = "N/A"
+
+    # Phase 1: SinoPac 即時快照（速度最快、資料最即時）
     try:
         sinopac = SinoPacProvider()
         snapshots = sinopac.get_snapshots(list(tickers_tuple))
@@ -52,24 +55,30 @@ def _fetch_prices_batch(tickers_tuple):
                 close = getattr(snap, 'close', 0) or 0
                 if code and close > 0:
                     prices[code] = float(close)
-            if len(prices) >= len(tickers_tuple) * 0.5:
+            if prices:
                 source_label = "SinoPac"
-                return prices, source_label
     except Exception:
         pass
-    try:
-        provider = get_data_provider("auto", market_type="TW")
-        for ticker in tickers_tuple:
-            if ticker in prices:
-                continue
-            try:
-                df = provider.get_historical_data(ticker, period="5d", interval="1d")
-                if df is not None and not df.empty and 'Close' in df.columns:
-                    prices[ticker] = float(df['Close'].iloc[-1])
-            except Exception:
-                pass
-    except Exception:
-        pass
+
+    # Phase 2: 補齊缺失的 ticker（YFinance fallback）
+    missing = [t for t in tickers_tuple if t not in prices]
+    if missing:
+        try:
+            provider = get_data_provider("auto", market_type="TW")
+            for ticker in missing:
+                try:
+                    df = provider.get_historical_data(ticker, period="5d", interval="1d")
+                    if df is not None and not df.empty and 'Close' in df.columns:
+                        prices[ticker] = float(df['Close'].iloc[-1])
+                except Exception:
+                    pass
+            if source_label == "N/A" and prices:
+                source_label = "YFinance"
+            elif missing and any(t in prices for t in missing):
+                source_label = f"{source_label}+YFinance" if source_label != "N/A" else "YFinance"
+        except Exception:
+            pass
+
     return prices, source_label
 
 
@@ -358,6 +367,75 @@ def render():
                 cyber_table(headers_sig, rows_sig)
             else:
                 st.caption("目前無突破信號")
+
+        # ── Risk Dashboard: Daily VaR + Performance Attribution ──
+        if paper['positions']:
+            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+            col_var, col_attr = st.columns(2)
+
+            with col_var:
+                st.markdown("#### 每日 VaR 風險值")
+                try:
+                    from analysis.risk_calc import calculate_var
+                    from data.provider import get_data_provider
+                    provider = get_data_provider("auto", market_type="TW")
+                    var_result = calculate_var(paper['positions'], provider, confidence=0.95, period='6mo')
+                    if var_result:
+                        var_color = "#ef4444" if var_result['var_amount'] < 0 else "#22c55e"
+                        cvar_color = "#ef4444" if var_result['cvar_amount'] < 0 else "#22c55e"
+                        st.markdown(
+                            f'<div style="padding:12px;background:rgba(0,0,0,0.2);border-radius:8px;'
+                            f'border-left:3px solid {var_color}">'
+                            f'<div style="display:flex;justify-content:space-between;margin-bottom:8px">'
+                            f'<div><span style="color:#64748b;font-size:0.7rem">95% VaR</span><br>'
+                            f'<span style="color:{var_color};font-size:1.1rem;font-weight:700;font-family:JetBrains Mono,monospace">'
+                            f'${abs(var_result["var_amount"]):,.0f}</span></div>'
+                            f'<div style="text-align:right"><span style="color:#64748b;font-size:0.7rem">CVaR (ES)</span><br>'
+                            f'<span style="color:{cvar_color};font-size:1.1rem;font-weight:700;font-family:JetBrains Mono,monospace">'
+                            f'${abs(var_result["cvar_amount"]):,.0f}</span></div></div>'
+                            f'<div style="font-size:0.7rem;color:#94a3b8">{var_result["interpretation"]}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.caption("VaR 資料不足（需至少 30 天歷史資料）")
+                except Exception as e:
+                    st.caption(f"VaR 計算暫時無法使用: {type(e).__name__}")
+
+            with col_attr:
+                st.markdown("#### 損益歸因")
+                try:
+                    from analysis.attribution import calculate_attribution
+                    from data.provider import get_data_provider
+                    provider = get_data_provider("auto", market_type="TW")
+                    attr_results, total_pnl = calculate_attribution(paper['positions'], provider)
+                    if attr_results:
+                        # 簡易歸因表
+                        for r in attr_results[:5]:
+                            pnl = r['daily_pnl']
+                            pnl_color = "#ef4444" if pnl >= 0 else "#22c55e"
+                            contrib = r['contribution_pct']
+                            bar_width = min(abs(contrib), 100)
+                            st.markdown(
+                                f'<div style="display:flex;align-items:center;gap:8px;padding:3px 0;'
+                                f'border-bottom:1px solid rgba(255,255,255,0.05)">'
+                                f'<span style="font-size:0.75rem;color:#e2e8f0;min-width:80px">{r["name"][:6]}</span>'
+                                f'<div style="flex:1;height:12px;background:rgba(255,255,255,0.05);border-radius:2px;overflow:hidden">'
+                                f'<div style="width:{bar_width}%;height:100%;background:{pnl_color};border-radius:2px"></div></div>'
+                                f'<span style="font-size:0.7rem;color:{pnl_color};font-family:JetBrains Mono,monospace;min-width:70px;text-align:right">'
+                                f'${pnl:+,.0f}</span></div>',
+                                unsafe_allow_html=True,
+                            )
+                        total_color = "#ef4444" if total_pnl >= 0 else "#22c55e"
+                        st.markdown(
+                            f'<div style="text-align:right;margin-top:6px;font-size:0.75rem;color:{total_color};'
+                            f'font-family:JetBrains Mono,monospace;font-weight:700">合計: ${total_pnl:+,.0f}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.caption("歸因分析需要持倉資料")
+                except Exception as e:
+                    st.caption(f"歸因分析暫時無法使用: {type(e).__name__}")
 
         # ── Bottom: Pending Orders ──
         st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)

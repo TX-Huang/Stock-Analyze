@@ -63,6 +63,62 @@ def atr_stop_price(df, multiplier=2.0, period=14):
     }
 
 
+def atr_position_size(df, total_capital, risk_per_trade=0.02, multiplier=2.0, period=14):
+    """
+    ATR 部位規模計算 — 根據 ATR 動態調整每筆交易的股數。
+
+    邏輯：
+        risk_amount = total_capital * risk_per_trade
+        stop_distance = ATR * multiplier
+        shares = risk_amount / stop_distance
+
+    Args:
+        df: OHLCV DataFrame
+        total_capital: 總資金
+        risk_per_trade: 每筆交易風險比例 (預設 2%)
+        multiplier: ATR 倍數 (預設 2x)
+        period: ATR 計算週期
+
+    Returns:
+        dict with shares, stop_price, risk_amount, position_value, weight_pct
+    """
+    if df is None or df.empty or len(df) < period + 1 or total_capital <= 0:
+        return None
+
+    atr = calculate_atr(df, period)
+    current_atr = float(atr.iloc[-1])
+    current_price = float(df['Close'].iloc[-1])
+
+    if current_price <= 0 or np.isnan(current_atr) or current_atr <= 0:
+        return None
+
+    risk_amount = total_capital * risk_per_trade
+    stop_distance = current_atr * multiplier
+
+    # 計算股數（台股 1 張 = 1000 股，但這裡以股為單位）
+    raw_shares = risk_amount / stop_distance
+    shares = max(int(raw_shares), 0)
+
+    if shares <= 0:
+        return None
+
+    position_value = shares * current_price
+    weight_pct = position_value / total_capital * 100
+
+    return {
+        'shares': shares,
+        'lots': shares // 1000,  # 台股張數
+        'current_price': current_price,
+        'atr': current_atr,
+        'stop_price': current_price - stop_distance,
+        'stop_distance': stop_distance,
+        'stop_distance_pct': stop_distance / current_price * 100,
+        'risk_amount': risk_amount,
+        'position_value': position_value,
+        'weight_pct': weight_pct,
+    }
+
+
 # ─── Portfolio Beta ───
 
 def calculate_portfolio_beta(positions, provider, benchmark_ticker='^TWII', period='1y'):
@@ -200,11 +256,11 @@ def calculate_var(positions, provider, confidence=0.95, period='6mo', horizon_da
     min_len = min(len(r) for r in returns_list)
     portfolio_returns = sum(r[-min_len:] for r in returns_list)
 
-    # Multi-day horizon
+    # Multi-day horizon: 使用正確的平方根法則
     if horizon_days > 1:
         portfolio_returns = portfolio_returns * np.sqrt(horizon_days)
 
-    # VaR = percentile of losses
+    # VaR = percentile of losses (historical simulation)
     var_amount = float(np.percentile(portfolio_returns, (1 - confidence) * 100))
     var_pct = var_amount / total_value * 100
 
@@ -213,17 +269,32 @@ def calculate_var(positions, provider, confidence=0.95, period='6mo', horizon_da
     cvar_amount = float(np.mean(tail_losses)) if len(tail_losses) > 0 else var_amount
     cvar_pct = cvar_amount / total_value * 100
 
+    # Parametric VaR (Normal distribution assumption) 作為參考
+    try:
+        from scipy import stats as scipy_stats
+        port_mean = float(np.mean(portfolio_returns))
+        port_std = float(np.std(portfolio_returns))
+        z_score = scipy_stats.norm.ppf(1 - confidence)
+        parametric_var = port_mean + z_score * port_std
+    except ImportError:
+        parametric_var = var_amount  # fallback
+
+    horizon_label = f"{horizon_days}日" if horizon_days > 1 else "單日"
     if var_amount >= 0:
-        interp = f'在 {confidence*100:.0f}% 信心水準下，即使最差情境仍預期獲利 {var_amount:,.0f} 元'
+        interp = f'{horizon_label} {confidence*100:.0f}% VaR: 預期最差情境仍獲利 ${var_amount:,.0f}'
     else:
-        interp = f'在 {confidence*100:.0f}% 信心水準下，單日最大預期虧損為 {abs(var_amount):,.0f} 元 ({abs(var_pct):.2f}%)'
+        interp = f'{horizon_label} {confidence*100:.0f}% VaR: 最大預期虧損 ${abs(var_amount):,.0f} ({abs(var_pct):.2f}%)'
 
     return {
         'var_amount': var_amount,
         'var_pct': var_pct,
         'cvar_amount': cvar_amount,
         'cvar_pct': cvar_pct,
+        'parametric_var': parametric_var,
         'portfolio_value': total_value,
+        'horizon_days': horizon_days,
+        'confidence': confidence,
+        'n_observations': len(portfolio_returns),
         'interpretation': interp,
     }
 
