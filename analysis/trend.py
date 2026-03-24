@@ -45,8 +45,9 @@ def calculate_structural_lines(df, lookback=100):
             "y_start_lower": lower_line[0],
             "y_end_lower": lower_line[-1]
         }
-    except Exception:
-        pass
+    except (ValueError, IndexError, TypeError) as e:
+        import logging
+        logging.debug(f"線性回歸通道計算失敗: {e}")
 
     # 2. 主要支撐壓力 (Pivot Clustering)
     n = 20

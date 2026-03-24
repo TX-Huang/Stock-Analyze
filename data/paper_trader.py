@@ -90,8 +90,8 @@ class PaperTrader:
                 for s in snaps:
                     quote_map[s['code']] = s
                 SinoPacProvider.logout()
-        except Exception as e:
-            logging.warning(f"報價取得失敗: {e}")
+        except (ImportError, ConnectionError, TimeoutError, KeyError, AttributeError) as e:
+            logging.warning(f"報價取得失敗 - {type(e).__name__}: {e}")
         return quote_map
 
     def catch_up(self, generate_func=None):
@@ -110,7 +110,8 @@ class PaperTrader:
 
         try:
             last_dt = datetime.strptime(last_updated[:10], '%Y-%m-%d').date()
-        except Exception:
+        except (ValueError, TypeError) as e:
+            logging.warning(f"無法解析 last_updated 日期 '{last_updated}': {e}")
             return 0
 
         today = date.today()
@@ -142,7 +143,7 @@ class PaperTrader:
                 self.update()
                 caught_up += 1
             except Exception as e:
-                logging.warning(f"補跟第 {i+1} 天失敗: {e}")
+                logging.warning(f"補跟第 {i+1} 天失敗 - {type(e).__name__}: {e}", exc_info=True)
                 break
 
         logging.info(f"補跟完成: {caught_up}/{trading_days} 天")
@@ -389,8 +390,8 @@ class PaperTrader:
                         name = str(cats_idx.loc[ticker, 'name']) if 'name' in cats_idx.columns else ''
                         if name and name != 'nan':
                             return name
-        except Exception:
-            pass
+        except (ImportError, KeyError, AttributeError, ValueError) as e:
+            logging.debug(f"FinLab 名稱查詢失敗 ({ticker}): {e}")
         # Method 2: yfinance fallback
         try:
             from data.provider import get_data_provider
@@ -399,8 +400,8 @@ class PaperTrader:
             name = info.get('name', '')
             if name and name != ticker:
                 return name
-        except Exception:
-            pass
+        except (ImportError, ConnectionError, TimeoutError, AttributeError) as e:
+            logging.debug(f"YFinance 名稱查詢失敗 ({ticker}): {e}")
         return ticker
 
     # ------------------------------------------------------------------

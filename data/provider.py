@@ -5,7 +5,7 @@ import datetime
 import time as _time
 import re
 import logging
-import streamlit as st
+import threading
 from collections import OrderedDict
 
 def sanitize_dataframe(df: pd.DataFrame, source_name: str = "Unknown") -> pd.DataFrame:
@@ -25,7 +25,8 @@ def sanitize_dataframe(df: pd.DataFrame, source_name: str = "Unknown") -> pd.Dat
     elif df.columns.dtype != 'object':
         try:
             df.columns = df.columns.astype(str)
-        except Exception: pass
+        except (TypeError, ValueError) as e:
+            logging.warning(f"[{source_name}] 欄位型態轉換失敗: {e}")
 
     # 2. 強制對齊索引型態 (Index) - 確保是時間格式
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -147,34 +148,149 @@ class YFinanceProvider(BaseDataProvider):
             dy = info.get('dividendYield', None)
             if dy is not None:
                 info_dict['yield'] = f"{dy*100:.2f}%"
-        except Exception:
-            pass
+        except (ConnectionError, TimeoutError, AttributeError, KeyError) as e:
+            logging.warning(f"[YFinance] {target_ticker}: 取得基本面資訊失敗 - {type(e).__name__}: {e}")
 
         return info_dict
 
 class FinlabProvider(BaseDataProvider):
     """
-    Finlab API 實作 (概念驗證)
+    Finlab API 實作
     從橫截面資料庫中抽取特定股票的 OHLCV 時間序列。
     """
     def __init__(self, api_token=""):
         self.api_token = api_token
-        # 在實際環境中需要 finlab.login(api_token)
+        if api_token:
+            try:
+                import finlab
+                finlab.login(api_token)
+                logging.info("[FinLab] 登入成功")
+            except Exception as e:
+                logging.warning(f"[FinLab] 登入失敗: {e}")
+
+    def _period_to_days(self, period: str) -> int:
+        """將 period 字串轉換為天數"""
+        period_map = {
+            '1mo': 30, '3mo': 90, '6mo': 180,
+            '1y': 365, '2y': 730, '5y': 1825, '10y': 3650,
+        }
+        return period_map.get(period, 730)
 
     def get_historical_data(self, ticker: str, period: str = "2y", interval: str = "1d") -> pd.DataFrame:
         """
-        FinLab 實作:
-        from finlab import data
-        close = data.get('price:收盤價')[ticker]
-        ... 組合出 OHLCV 格式
+        FinLab 實作: 從橫截面資料取出單一股票的 OHLCV 時間序列。
         """
-        # TODO: 實作真實的 Finlab 資料串接
-        st.warning(f"FinlabProvider 尚未完全實作歷史資料擷取: {ticker}")
-        return pd.DataFrame()
+        try:
+            from finlab import data
+
+            ticker_str = str(ticker).strip()
+
+            close = data.get('price:收盤價')
+            open_ = data.get('price:開盤價')
+            high = data.get('price:最高價')
+            low = data.get('price:最低價')
+            vol = data.get('price:成交股數')
+
+            # 確保 CategoricalIndex 轉為 string 以便比對
+            for df_tmp in [close, open_, high, low, vol]:
+                if isinstance(df_tmp.columns, pd.CategoricalIndex):
+                    df_tmp.columns = df_tmp.columns.astype(str)
+
+            if ticker_str not in close.columns:
+                logging.warning(f"[FinLab] 股票 {ticker_str} 不存在於資料中")
+                return pd.DataFrame()
+
+            df = pd.DataFrame({
+                'Open': open_[ticker_str],
+                'High': high[ticker_str],
+                'Low': low[ticker_str],
+                'Close': close[ticker_str],
+                'Volume': vol[ticker_str],
+            })
+            df.index = pd.to_datetime(df.index)
+            df.index.name = 'Date'
+            df = df.dropna(subset=['Close'])
+
+            # 依 period 參數截取時間範圍
+            days = self._period_to_days(period)
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
+            df = df[df.index >= cutoff]
+
+            # 週線重新取樣（不使用 resample='D'）
+            if interval == '1wk':
+                df = df.resample('W-FRI').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum',
+                }).dropna(subset=['Close'])
+
+            return df
+
+        except Exception as e:
+            logging.warning(f"[FinLab] 取得 {ticker} 歷史資料失敗: {e}")
+            return pd.DataFrame()
 
     def get_stock_info(self, ticker: str) -> dict:
-        # TODO: 實作真實的 Finlab 基本面擷取
-        return {'name': str(ticker), 'pe': 'N/A', 'eps': 'N/A', 'yield': 'N/A', 'raw_ticker': ticker}
+        """從 FinLab 取得基本面資訊"""
+        info_dict = {
+            'name': str(ticker),
+            'pe': 'N/A',
+            'eps': 'N/A',
+            'yield': 'N/A',
+            'raw_ticker': ticker,
+        }
+        try:
+            from finlab import data
+
+            ticker_str = str(ticker).strip()
+
+            # 公司基本資訊（名稱）
+            try:
+                company_info = data.get('company_basic_info')
+                if isinstance(company_info.columns, pd.CategoricalIndex):
+                    company_info.columns = company_info.columns.astype(str)
+                if '公司簡稱' in company_info.columns:
+                    row = company_info[company_info.index.astype(str) == ticker_str]
+                    if not row.empty:
+                        info_dict['name'] = str(row['公司簡稱'].iloc[0])
+                elif ticker_str in company_info.index.astype(str).tolist():
+                    # company_basic_info 格式可能是 stock_id 為 index
+                    row = company_info.loc[company_info.index.astype(str) == ticker_str]
+                    if not row.empty and '公司簡稱' in row.columns:
+                        info_dict['name'] = str(row['公司簡稱'].iloc[0])
+            except Exception as e:
+                logging.debug(f"[FinLab] 取得 {ticker_str} 公司名稱失敗: {e}")
+
+            # 本益比
+            try:
+                pe_df = data.get('price_earning_ratio:本益比')
+                if isinstance(pe_df.columns, pd.CategoricalIndex):
+                    pe_df.columns = pe_df.columns.astype(str)
+                if ticker_str in pe_df.columns:
+                    pe_val = pe_df[ticker_str].dropna()
+                    if not pe_val.empty:
+                        info_dict['pe'] = round(float(pe_val.iloc[-1]), 2)
+            except Exception as e:
+                logging.debug(f"[FinLab] 取得 {ticker_str} 本益比失敗: {e}")
+
+            # EPS（每股盈餘）
+            try:
+                eps_df = data.get('fundamental_features:每股稅後淨利')
+                if isinstance(eps_df.columns, pd.CategoricalIndex):
+                    eps_df.columns = eps_df.columns.astype(str)
+                if ticker_str in eps_df.columns:
+                    eps_val = eps_df[ticker_str].dropna()
+                    if not eps_val.empty:
+                        info_dict['eps'] = round(float(eps_val.iloc[-1]), 2)
+            except Exception as e:
+                logging.debug(f"[FinLab] 取得 {ticker_str} EPS 失敗: {e}")
+
+        except Exception as e:
+            logging.warning(f"[FinLab] 取得 {ticker} 基本面資訊失敗: {e}")
+
+        return info_dict
 
 class SinoPacProvider(BaseDataProvider):
     """
@@ -185,72 +301,70 @@ class SinoPacProvider(BaseDataProvider):
     _logged_in = False
     _last_connected = None  # 上次連線時間戳
     _RECONNECT_INTERVAL = 4 * 3600  # 4 小時強制重連
+    _lock = threading.Lock()  # 類別層級鎖，保護 _api_instance 等共享狀態
 
     def __init__(self, api_key="", secret_key="", **kwargs):
 
         self.api_key = api_key
         self.secret_key = secret_key
         self._cache = OrderedDict()  # {(ticker, period, interval): (df, timestamp)}
+        self._cache_lock = threading.Lock()  # 實例層級鎖，保護 _cache 存取
         self._cache_ttl = 3600  # 1 小時快取
         self._cache_max = 200  # 最大快取數量
 
-        if not self.api_key or not self.secret_key:
-            # 嘗試從 Streamlit secrets 取得
-            try:
-                self.api_key = self.api_key or st.secrets.get("SINOPAC_API_KEY", "")
-                self.secret_key = self.secret_key or st.secrets.get("SINOPAC_SECRET_KEY", "")
-            except Exception:
-                pass
-
     def _get_api(self):
         """取得或建立 Shioaji API 連線（全域快取 + 健康檢查）"""
-
-        if SinoPacProvider._api_instance is not None:
-            # 健康檢查 1: 超過 4 小時強制重連
-            if (SinoPacProvider._last_connected is not None
-                    and _time.time() - SinoPacProvider._last_connected > SinoPacProvider._RECONNECT_INTERVAL):
-                logging.info("[SinoPac] 連線超過 4 小時，強制重連")
-                self._reset_api()
-            else:
-                # 健康檢查 2: 嘗試簡單操作確認連線仍有效
-                try:
-                    _ = SinoPacProvider._api_instance.Contracts.Stocks
-                    return SinoPacProvider._api_instance
-                except Exception as e:
-                    logging.warning(f"[SinoPac] 連線健康檢查失敗 ({e})，重新連線")
+        with SinoPacProvider._lock:
+            if SinoPacProvider._api_instance is not None:
+                # 健康檢查 1: 超過 4 小時強制重連
+                if (SinoPacProvider._last_connected is not None
+                        and _time.time() - SinoPacProvider._last_connected > SinoPacProvider._RECONNECT_INTERVAL):
+                    logging.info("[SinoPac] 連線超過 4 小時，強制重連")
                     self._reset_api()
+                else:
+                    # 健康檢查 2: 嘗試簡單操作確認連線仍有效
+                    try:
+                        _ = SinoPacProvider._api_instance.Contracts.Stocks
+                        return SinoPacProvider._api_instance
+                    except Exception as e:
+                        logging.warning(f"[SinoPac] 連線健康檢查失敗 ({e})，重新連線")
+                        self._reset_api()
 
-        if not self.api_key or not self.secret_key:
-            logging.warning("[SinoPac] API 金鑰未設定")
-            return None
+            if not self.api_key or not self.secret_key:
+                logging.warning("[SinoPac] API 金鑰未設定")
+                return None
 
-        try:
-            import shioaji as sj
-            api = sj.Shioaji()
-            api.login(self.api_key, self.secret_key)
-            SinoPacProvider._api_instance = api
-            SinoPacProvider._logged_in = True
-            SinoPacProvider._last_connected = _time.time()
-            logging.info("[SinoPac] 登入成功")
-            return api
-        except Exception as e:
-            logging.error(f"[SinoPac] 登入失敗: {e}")
-            return None
+            try:
+                import shioaji as sj
+                api = sj.Shioaji()
+                api.login(self.api_key, self.secret_key)
+                SinoPacProvider._api_instance = api
+                SinoPacProvider._logged_in = True
+                SinoPacProvider._last_connected = _time.time()
+                logging.info("[SinoPac] 登入成功")
+                return api
+            except Exception as e:
+                logging.error(f"[SinoPac] 登入失敗: {e}")
+                return None
 
     @classmethod
     def _reset_api(cls):
-        """重設 API 連線（不 logout，因為可能已經斷線）"""
+        """重設 API 連線（不 logout，因為可能已經斷線）
+        Note: Caller is expected to already hold cls._lock when called from _get_api().
+              Direct callers (e.g. logout) should acquire the lock themselves.
+        """
         try:
             if cls._api_instance is not None:
                 cls._api_instance.logout()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"[SinoPac] 重設 API 時登出失敗 (可能已斷線): {e}")
         cls._api_instance = None
         cls._logged_in = False
         cls._last_connected = None
 
     def _evict_cache(self):
-        """快取超過上限時，先清除過期項目，再淘汰最舊的"""
+        """快取超過上限時，先清除過期項目，再淘汰最舊的。
+        Note: Caller must hold self._cache_lock."""
         if len(self._cache) <= self._cache_max:
             return
         # Phase 1: 清除已過 TTL 的項目
@@ -296,14 +410,15 @@ class SinoPacProvider(BaseDataProvider):
 
         # 快取檢查
         cache_key = (ticker, period, interval)
-        if cache_key in self._cache:
-            df, ts = self._cache[cache_key]
-            if _time.time() - ts < self._cache_ttl:
-                self._cache.move_to_end(cache_key)  # LRU: 標記為最近使用
-                logging.info(f"[SinoPac] {ticker}: 使用快取資料")
-                return df
-            else:
-                del self._cache[cache_key]  # 過期，移除
+        with self._cache_lock:
+            if cache_key in self._cache:
+                df, ts = self._cache[cache_key]
+                if _time.time() - ts < self._cache_ttl:
+                    self._cache.move_to_end(cache_key)  # LRU: 標記為最近使用
+                    logging.info(f"[SinoPac] {ticker}: 使用快取資料")
+                    return df
+                else:
+                    del self._cache[cache_key]  # 過期，移除
 
         api = self._get_api()
         if api is None:
@@ -345,8 +460,9 @@ class SinoPacProvider(BaseDataProvider):
                 }).dropna()
 
             if len(df) > 30:
-                self._cache[cache_key] = (df, _time.time())
-                self._evict_cache()
+                with self._cache_lock:
+                    self._cache[cache_key] = (df, _time.time())
+                    self._evict_cache()
                 logging.info(f"[SinoPac] {ticker}: 成功取得 {len(df)} 筆資料")
                 return df
             else:
@@ -399,8 +515,8 @@ class SinoPacProvider(BaseDataProvider):
             if contract:
                 info_dict['name'] = getattr(contract, 'name', str(ticker))
                 info_dict['raw_ticker'] = ticker
-        except Exception:
-            pass
+        except (ConnectionError, AttributeError, KeyError) as e:
+            logging.warning(f"[SinoPac] {ticker}: 取得基本面資訊失敗 - {type(e).__name__}: {e}")
         return info_dict
 
 

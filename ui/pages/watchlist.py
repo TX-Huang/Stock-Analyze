@@ -256,12 +256,19 @@ def render(_embedded=False):
     <tbody>{tr_html}</tbody>
     </table>""", unsafe_allow_html=True)
 
-    # --- Delete buttons (Streamlit buttons below table) ---
-    st.markdown('<p class="sec-header">刪除操作</p>', unsafe_allow_html=True)
-    del_cols = st.columns(min(len(stocks), 6))
+    # --- Action buttons: Analyze + Delete ---
+    st.markdown('<p class="sec-header">操作</p>', unsafe_allow_html=True)
+    action_cols = st.columns(min(len(stocks), 4))
     for i, s in enumerate(stocks):
-        col_idx = i % min(len(stocks), 6)
-        with del_cols[col_idx]:
-            if st.button(f"🗑 {s['ticker']}", key=f"del_{s['ticker']}"):
-                wm.remove(s['ticker'])
-                st.rerun()
+        col_idx = i % min(len(stocks), 4)
+        with action_cols[col_idx]:
+            c_analyze, c_del = st.columns(2)
+            with c_analyze:
+                if st.button(f"🔍 {s['ticker']}", key=f"analyze_{s['ticker']}", help="跳轉到深度分析"):
+                    st.session_state['pending_analysis'] = s['ticker']
+                    st.session_state['_force_research'] = True
+                    st.rerun()
+            with c_del:
+                if st.button(f"🗑", key=f"del_{s['ticker']}", help=f"刪除 {s['ticker']}"):
+                    wm.remove(s['ticker'])
+                    st.rerun()

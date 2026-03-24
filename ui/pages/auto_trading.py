@@ -291,7 +291,7 @@ def _render_position_charts(positions, pt_status=None):
                             st.markdown(f'<div style="height:60px; display:flex; align-items:center; justify-content:center; background:#0f172a; border-radius:0 0 4px 4px; color:#475569; font-size:0.75rem;">⚠ {ticker} 無法取得資料（Yahoo Finance 可能不支援此代碼）</div>', unsafe_allow_html=True)
                             continue
 
-                        df['BB_Upper'], df['BB_Lower'] = calculate_bbands(df)
+                        df['BB_Upper'], _, df['BB_Lower'] = calculate_bbands(df)
                         candle_pats = detect_candlestick_patterns(df)
                         patterns = []
 

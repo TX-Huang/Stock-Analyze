@@ -15,12 +15,14 @@ def calculate_correlation_matrix(tickers, provider, period="6mo"):
     """
     returns_dict = {}
 
+    import logging
     for ticker in tickers:
         try:
             df = provider.get_historical_data(str(ticker), period=period, interval="1d")
             if df is not None and not df.empty and len(df) >= 30:
                 returns_dict[str(ticker)] = df['Close'].pct_change().dropna()
-        except Exception:
+        except (ConnectionError, TimeoutError, KeyError, ValueError) as e:
+            logging.warning(f"相關性計算: {ticker} 資料取得失敗 - {type(e).__name__}: {e}")
             continue
 
     if len(returns_dict) < 2:

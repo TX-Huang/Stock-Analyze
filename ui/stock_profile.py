@@ -6,9 +6,12 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import logging
 from datetime import datetime
 
 from ui.theme import _tw_color, _tw_color_pct, _plotly_dark_layout
+
+logger = logging.getLogger(__name__)
 
 
 def render_stock_profile(ticker, show_actions=True):
@@ -281,10 +284,11 @@ def render_stock_profile(ticker, show_actions=True):
                             )
                         else:
                             st.caption("AI 解讀生成失敗")
-            except Exception:
-                pass  # No Gemini, skip AI
+            except Exception as e:
+                logger.debug(f"AI 解讀跳過: {e}")
 
     except Exception as e:
+        logger.warning(f"交易論述生成失敗 ({ticker}): {e}")
         st.caption(f"交易論述生成失敗: {e}")
 
     # ── Action Buttons ──
@@ -386,8 +390,8 @@ def _fetch_stock_data(ticker):
             stock_info = provider.get_stock_info(ticker)
             if stock_info:
                 info = stock_info
-        except Exception:
-            pass
+        except (ConnectionError, TimeoutError, AttributeError) as e:
+            logger.debug(f"取得 {ticker} 基本面資訊失敗: {e}")
 
         name = info.get('shortName', info.get('longName', ticker))
         # Clean up Yahoo Finance name
@@ -395,7 +399,8 @@ def _fetch_stock_data(ticker):
             name = name[:20]
 
         return df, info, name
-    except Exception:
+    except Exception as e:
+        logger.warning(f"取得 {ticker} 股票資料失敗: {e}")
         return None, {}, ticker
 
 
@@ -405,7 +410,8 @@ def _check_watchlist(ticker):
         from data.watchlist import WatchlistManager
         wm = WatchlistManager()
         return any(s['ticker'] == ticker for s in wm.get_all())
-    except Exception:
+    except Exception as e:
+        logger.debug(f"自選股查詢失敗 ({ticker}): {e}")
         return False
 
 
@@ -422,7 +428,7 @@ def _check_position(ticker):
                 try:
                     entry_date = datetime.fromisoformat(p.get('entry_date', ''))
                     days_held = (datetime.now() - entry_date).days
-                except Exception:
+                except (ValueError, TypeError):
                     pass
                 return {
                     'entry_price': p.get('entry_price', 0),
@@ -430,7 +436,8 @@ def _check_position(ticker):
                     'days_held': days_held,
                 }
         return None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"持倉查詢失敗 ({ticker}): {e}")
         return None
 
 
@@ -445,7 +452,8 @@ def _fetch_chip_data(ticker):
         if chip_data:
             return analyze_chip_for_ticker(ticker, chip_data)
         return None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"籌碼資料取得失敗 ({ticker}): {e}")
         return None
 
 
@@ -457,5 +465,6 @@ def _fetch_signal_data(ticker, df):
         from analysis.breakout import detect_levels, detect_signal
         levels = detect_levels(df)
         return detect_signal(df, levels)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"信號偵測失敗 ({ticker}): {e}")
         return None

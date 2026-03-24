@@ -122,7 +122,8 @@ class AutoTrader:
                     existing_archive = json.load(f)
                 if not isinstance(existing_archive, list):
                     existing_archive = existing_archive.get('orders', [])
-            except Exception:
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                logging.warning(f"[AutoTrader] 讀取歸檔檔案失敗: {e}")
                 existing_archive = []
 
         merged = existing_archive + to_archive
@@ -157,8 +158,8 @@ class AutoTrader:
         if self._api:
             try:
                 self._api.logout()
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning(f"[AutoTrader] API 登出失敗: {e}")
             self._api = None
 
     # --------------------------------------------------
@@ -190,7 +191,8 @@ class AutoTrader:
             max_pos = recommendation.get('summary', {}).get('max_concurrent', 8)
             exposure = recommendation.get('exposure', 1.0)
             per_stock = (equity * exposure) / max(max_pos, 1)
-        except Exception:
+        except (ImportError, FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+            logging.warning(f"[AutoTrader] PaperTrader 載入失敗，使用預設配置: {e}")
             per_stock = max_val
 
         for rec in recommendation.get('recommendations', []):
@@ -220,7 +222,8 @@ class AutoTrader:
         try:
             from data.paper_trader import PaperTrader
             pt_positions = {p['ticker']: p for p in PaperTrader().account['positions']}
-        except Exception:
+        except (ImportError, FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+            logging.warning(f"[AutoTrader] 載入 PaperTrader 持倉失敗: {e}")
             pt_positions = {}
 
         for ex in exits:
@@ -243,7 +246,8 @@ class AutoTrader:
             available_cash = pt.account['cash']
             current_equity = pt._calc_equity()
             current_positions = len(pt.account['positions'])
-        except Exception:
+        except (ImportError, FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+            logging.warning(f"[AutoTrader] PaperTrader 載入失敗，使用初始資金: {e}")
             available_cash = self.config['initial_capital']
             current_equity = self.config['initial_capital']
             current_positions = 0

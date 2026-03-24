@@ -38,75 +38,50 @@ def rolling_mad(series, window, min_periods=None):
     return pd.Series(out, index=series.index)
 
 
-def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mode='signal_e',
-                       params=None, sim_start=None, sim_end=None, raw_mode=False):
+def _to_numpy(obj, master_index, master_columns_str, sanitize_dataframe, obj_name="Unknown", is_benchmark=False):
     """
-    執行 Isaac V3.7 策略回測。
-    V3.7: Signal D 轉避險指標 + Score Weight + Dynamic Exposure
+    將 pandas 物件對齊到 master_index/master_columns_str 並轉為 numpy array。
+    原本定義在 run_isaac_strategy 內的閉包函數，提取為模組級函數。
+    """
+    if obj is None: return np.nan
+    if isinstance(obj, pd.DataFrame):
+        obj = sanitize_dataframe(obj, source_name=obj_name)
+    if isinstance(obj, pd.Series):
+        obj = obj.reindex(master_index).ffill()
+        return obj.fillna(0).values.reshape(-1, 1)
+    elif isinstance(obj, pd.DataFrame):
+        if not is_benchmark:
+            df_temp = obj.copy()
+            df_temp.columns = df_temp.columns.astype(str)
+            df_aligned = df_temp.reindex(index=master_index, columns=master_columns_str).ffill()
+            return df_aligned.fillna(0).values
+        else:
+            obj = obj.reindex(index=master_index).ffill()
+            return obj.fillna(0).values
+    elif isinstance(obj, np.ndarray):
+        return obj
+    else:
+        return np.array(obj)
 
-    params (dict, 可選): 覆蓋預設參數
-        trail_stop       (float) : 追蹤停損比例，預設 0.18
-        rsi_threshold    (int)   : Signal B RSI 超賣門檻，預設 28
-        volume_mult      (float) : 突破量能倍率（Signal A/B），預設 1.5
-        supply_danger_pct(float) : 供給區安全距離，預設 0.97
-        liq_min          (int)   : 流動性門檻（均量股數），預設 500000
-    sim_start (str): 回測起始日 (YYYY-MM-DD)，用於 WFO 窗口
-    sim_end   (str): 回測結束日 (YYYY-MM-DD)，用於 WFO 窗口
-    raw_mode (bool): 若 True，不執行 sim，返回 final_pos 和相關數據供外部配置
+
+def _fetch_data(api_token):
+    """
+    1. 數據抓取 (Fetch Data)
+    登入 FinLab 並取得所有需要的價量與基本面資料。
+
+    Returns:
+        dict: 包含所有 DataFrames 和 master_index/master_columns_str
     """
     from data.provider import sanitize_dataframe
 
     if api_token:
         finlab.login(api_token)
 
-    if stop_loss is not None: stop_loss = float(stop_loss)
-    if take_profit is not None: take_profit = float(take_profit)
-
-    # --- 可調參數 (WFO 網格搜索的優化目標) ---
-    p = params or {}
-    _trail_stop        = float(p.get('trail_stop',        0.18))
-    _rsi_threshold     = int(p.get('rsi_threshold',       28))
-    _volume_mult       = float(p.get('volume_mult',       1.5))
-    _supply_danger_pct = float(p.get('supply_danger_pct', 0.97))
-    _liq_min           = int(p.get('liq_min',             500000))
-    # --- 實驗參數 (優化測試用) ---
-    _atr_exit          = bool(p.get('atr_exit',           False))   # ATR 動態出場
-    _disable_d         = bool(p.get('disable_d',          False))
-    _time_stop_days    = int(p.get('time_stop_days',      0))       # 時間停損 (0=關閉)
-    _min_score         = float(p.get('min_score',         4))       # 最低 score 門檻 (0=不過濾)
-    _confirm_days      = int(p.get('confirm_days',        0))       # 突破確認天數 (0=不確認)
-    _max_per_industry  = int(p.get('max_per_industry',    0))       # 每產業最多N檔 (0=不限)
-    _breadth_filter    = bool(p.get('breadth_filter',     False))   # 大盤寬度過濾
-
-    # ==========================================
-    # 1. 數據抓取 (Fetch Data)
-    # ==========================================
     close = sanitize_dataframe(data.get('price:收盤價'), "FinLab_Close")
 
     # [Fix 3: Immutability] - 不修改 close.columns，避免污染 Finlab 全域快取
     master_index = close.index
     master_columns_str = close.columns.astype(str)
-
-    def to_numpy(obj, obj_name="Unknown", is_benchmark=False):
-        if obj is None: return np.nan
-        if isinstance(obj, pd.DataFrame):
-            obj = sanitize_dataframe(obj, source_name=obj_name)
-        if isinstance(obj, pd.Series):
-            obj = obj.reindex(master_index).ffill()
-            return obj.fillna(0).values.reshape(-1, 1)
-        elif isinstance(obj, pd.DataFrame):
-            if not is_benchmark:
-                df_temp = obj.copy()
-                df_temp.columns = df_temp.columns.astype(str)
-                df_aligned = df_temp.reindex(index=master_index, columns=master_columns_str).ffill()
-                return df_aligned.fillna(0).values
-            else:
-                obj = obj.reindex(index=master_index).ffill()
-                return obj.fillna(0).values
-        elif isinstance(obj, np.ndarray):
-            return obj
-        else:
-            return np.array(obj)
 
     # 價格數據
     open_ = data.get('price:開盤價')
@@ -160,6 +135,59 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
         inst_net_buy = foreign_buy + trust_buy
     except Exception:
         inst_net_buy = pd.DataFrame(0, index=master_index, columns=close.columns)
+
+    return {
+        'close': close,
+        'master_index': master_index,
+        'master_columns_str': master_columns_str,
+        'open_': open_,
+        'high': high,
+        'low': low,
+        'vol': vol,
+        'benchmark_close': benchmark_close,
+        'rev_growth': rev_growth,
+        'rev_current': rev_current,
+        'capital': capital,
+        'eps': eps,
+        'op_income': op_income,
+        'roe': roe,
+        'op_margin': op_margin,
+        'pe': pe,
+        'inst_net_buy': inst_net_buy,
+    }
+
+
+def _compute_technicals(data_dict):
+    """
+    2. 預計算 (Pandas 階段) + 3. NumPy 轉換
+    計算所有技術指標、K 線型態、並轉為 numpy arrays。
+
+    Returns:
+        dict: 包含所有 numpy arrays 和部分 pandas 物件 (用於後續步驟)
+    """
+    from data.provider import sanitize_dataframe
+
+    close = data_dict['close']
+    master_index = data_dict['master_index']
+    master_columns_str = data_dict['master_columns_str']
+    open_ = data_dict['open_']
+    high = data_dict['high']
+    low = data_dict['low']
+    vol = data_dict['vol']
+    benchmark_close = data_dict['benchmark_close']
+    rev_growth = data_dict['rev_growth']
+    rev_current = data_dict['rev_current']
+    eps = data_dict['eps']
+    op_income = data_dict['op_income']
+    roe = data_dict['roe']
+    op_margin = data_dict['op_margin']
+    pe = data_dict['pe']
+    inst_net_buy = data_dict['inst_net_buy']
+
+    # Helper for numpy conversion (closure over master_index/master_columns_str)
+    def to_numpy(obj, obj_name="Unknown", is_benchmark=False):
+        return _to_numpy(obj, master_index, master_columns_str, sanitize_dataframe,
+                         obj_name=obj_name, is_benchmark=is_benchmark)
 
     # ==========================================
     # 2. 預計算 (Pandas 階段)
@@ -396,8 +424,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     v_rs_rank = to_numpy(rs_rank)
     v_vol_dry = to_numpy(vol_dry_up)
     v_bb_consol = to_numpy(bb_consolidation)
-    has_ma150 = v_ma150 > 0
-    has_ma200 = v_ma200 > 0
 
     # [V3.3] 動態 Trailing Stop NumPy 轉換
     v_trail_level = to_numpy(trail_level)
@@ -406,7 +432,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     v_rev_growth = to_numpy(rev_growth)
     v_rev_current = to_numpy(rev_current)
     v_rev_12m_max = to_numpy(rev_12m_max)
-    v_capital = to_numpy(capital)
+    v_capital = to_numpy(data_dict['capital'])
     v_eps_sum = to_numpy(eps_sum)
     v_op_income = to_numpy(op_income)
     v_pe = to_numpy(pe)
@@ -420,6 +446,96 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     # 大盤 (1D -> 廣播)
     v_bench = to_numpy(benchmark_close, is_benchmark=True)
     v_bench_ma60 = to_numpy(bench_ma60, is_benchmark=True)
+
+    return {
+        # numpy arrays
+        'v_close': v_close, 'v_open': v_open, 'v_high': v_high, 'v_low': v_low, 'v_vol': v_vol,
+        'v_ma10': v_ma10, 'v_ma20': v_ma20, 'v_ma50': v_ma50, 'v_ma60': v_ma60, 'v_ma120': v_ma120,
+        'v_ma150': v_ma150, 'v_ma200': v_ma200,
+        'v_vol_ma5': v_vol_ma5, 'v_vol_ma20': v_vol_ma20,
+        'v_rsi': v_rsi, 'v_close_max_20': v_close_max_20, 'v_high_250': v_high_250,
+        'v_bb_contracting': v_bb_contracting, 'v_rel_strength': v_rel_strength,
+        'v_hv_normal': v_hv_normal, 'v_hv_compressed': v_hv_compressed, 'v_z_score': v_z_score,
+        'v_rs_short': v_rs_short, 'v_rev_momentum': v_rev_momentum,
+        'v_weekly_uptrend': v_weekly_uptrend,
+        'v_pat_bull_engulf': v_pat_bull_engulf, 'v_pat_morning_star': v_pat_morning_star,
+        'v_pat_bear_engulf': v_pat_bear_engulf, 'v_pat_evening_star': v_pat_evening_star,
+        'v_macd_hist': v_macd_hist, 'v_macd_hist_prev': v_macd_hist_prev,
+        'v_close_min_20': v_close_min_20,
+        'v_high_252': v_high_252, 'v_low_252': v_low_252,
+        'v_rs_rank': v_rs_rank, 'v_vol_dry': v_vol_dry, 'v_bb_consol': v_bb_consol,
+        'v_trail_level': v_trail_level,
+        'v_rev_growth': v_rev_growth, 'v_rev_current': v_rev_current, 'v_rev_12m_max': v_rev_12m_max,
+        'v_capital': v_capital, 'v_eps_sum': v_eps_sum, 'v_op_income': v_op_income,
+        'v_pe': v_pe, 'v_roe': v_roe, 'v_op_margin': v_op_margin,
+        'v_inst_rolling': v_inst_rolling, 'v_inst_streak': v_inst_streak,
+        'v_bench': v_bench, 'v_bench_ma60': v_bench_ma60,
+        'v_etf_ok': v_etf_ok,
+    }
+
+
+def _generate_signals(technicals, data_dict, params, minervini_mode):
+    """
+    4. 策略邏輯 V3 (Data-Driven 修正)
+    生成 Signal A-E 及對應的出場條件與評分。
+
+    Returns:
+        dict: 包含所有信號、出場條件、評分 arrays
+    """
+    # --- 解包可調參數 ---
+    p = params or {}
+    _volume_mult       = float(p.get('volume_mult',       1.5))
+    _supply_danger_pct = float(p.get('supply_danger_pct', 0.97))
+    _rsi_threshold     = int(p.get('rsi_threshold',       28))
+    _confirm_days      = int(p.get('confirm_days',        0))
+    _breadth_filter    = bool(p.get('breadth_filter',     False))
+    _disable_d         = bool(p.get('disable_d',          False))
+    _atr_exit          = bool(p.get('atr_exit',           False))
+
+    close = data_dict['close']
+    master_index = data_dict['master_index']
+
+    # --- 解包 numpy arrays ---
+    v_close = technicals['v_close']
+    v_open = technicals['v_open']
+    v_high = technicals['v_high']
+    v_low = technicals['v_low']
+    v_vol = technicals['v_vol']
+    v_ma10 = technicals['v_ma10']
+    v_ma20 = technicals['v_ma20']
+    v_ma50 = technicals['v_ma50']
+    v_ma60 = technicals['v_ma60']
+    v_ma120 = technicals['v_ma120']
+    v_ma150 = technicals['v_ma150']
+    v_ma200 = technicals['v_ma200']
+    v_vol_ma5 = technicals['v_vol_ma5']
+    v_vol_ma20 = technicals['v_vol_ma20']
+    v_rsi = technicals['v_rsi']
+    v_close_max_20 = technicals['v_close_max_20']
+    v_high_250 = technicals['v_high_250']
+    v_bb_contracting = technicals['v_bb_contracting']
+    v_rel_strength = technicals['v_rel_strength']
+    v_hv_normal = technicals['v_hv_normal']
+    v_hv_compressed = technicals['v_hv_compressed']
+    v_z_score = technicals['v_z_score']
+    v_rs_short = technicals['v_rs_short']
+    v_rev_momentum = technicals['v_rev_momentum']
+    v_weekly_uptrend = technicals['v_weekly_uptrend']
+    v_macd_hist = technicals['v_macd_hist']
+    v_macd_hist_prev = technicals['v_macd_hist_prev']
+    v_close_min_20 = technicals['v_close_min_20']
+    v_high_252 = technicals['v_high_252']
+    v_low_252 = technicals['v_low_252']
+    v_rs_rank = technicals['v_rs_rank']
+    v_vol_dry = technicals['v_vol_dry']
+    v_bb_consol = technicals['v_bb_consol']
+    v_trail_level = technicals['v_trail_level']
+    v_rev_growth = technicals['v_rev_growth']
+    v_eps_sum = technicals['v_eps_sum']
+    v_inst_streak = technicals['v_inst_streak']
+    v_bench = technicals['v_bench']
+    v_bench_ma60 = technicals['v_bench_ma60']
+    v_etf_ok = technicals['v_etf_ok']
 
     # ==========================================
     # 4. 策略邏輯 V3 (Data-Driven 修正)
@@ -443,13 +559,15 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     has_ma50 = v_ma50 > 0
     has_ma60 = v_ma60 > 0
     has_ma120 = v_ma120 > 0
+    has_ma150 = v_ma150 > 0
+    has_ma200 = v_ma200 > 0
 
     # 市場狀態濾網
     v_bullish = (v_bench > v_bench_ma60 * 1.01) & (v_bench_ma60 > 0)
     v_bearish = (v_bench < v_bench_ma60 * 0.99) & (v_bench_ma60 > 0) & (v_bench > 0)
 
     # 流動性濾網
-    v_liq = (v_vol_ma20 > _liq_min)
+    v_liq = (v_vol_ma20 > int(p.get('liq_min', 500000)))
 
     # Supply Zone Filter (套牢區濾網)
     c_supply_danger = (v_close >= v_high_250 * _supply_danger_pct) & (v_close < v_high_250) & (v_high_250 > 0)
@@ -617,6 +735,94 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     score_d -= (c_d_macd_bearish > 0).astype(int)                 # -1: MACD 確認
     score_d = np.maximum(score_d, -3)                              # 上限 -3 (保守)
 
+    # [V3] Signal A 出場: 跌破 MA60 (給較大的波動空間)
+    exit_a = (v_close < v_ma60) & has_ma60
+
+    # [實驗] ATR 動態出場: close < (60日高點 - 3*ATR14)
+    if _atr_exit:
+        exit_atr = (v_close < v_trail_level) & (v_trail_level > 0)
+        exit_a = exit_a | exit_atr
+
+    # Signal A+B 統一出場
+    long_entries_ab = sig_a | sig_b
+    long_exits_ab = exit_a
+
+    return {
+        'sig_a': sig_a, 'sig_b': sig_b, 'sig_c': sig_c, 'sig_d': sig_d, 'sig_e': sig_e,
+        'long_entries_ab': long_entries_ab, 'long_exits_ab': long_exits_ab,
+        'exit_c': exit_c, 'exit_d': exit_d, 'exit_e': exit_e,
+        'score_c': score_c, 'score_d': score_d, 'score_e': score_e,
+        'c_strong_close': c_strong_close, 'c_rs': c_rs, 'c_bb_tight': c_bb_tight,
+        'c_full_minervini': c_full_minervini, 'c_rs_rank_70': c_rs_rank_70,
+        'c_52w_new_high': c_52w_new_high, 'c_vol_dry': c_vol_dry,
+        'v_bullish': v_bullish, 'v_bearish': v_bearish, 'v_liq': v_liq,
+        'c_trend': c_trend, 'c_breakout': c_breakout, 'c_hv_ok': c_hv_ok,
+        'c_safe_supply': c_safe_supply, 'c_oversold': c_oversold,
+        'c_rsi_panic': c_rsi_panic, 'c_hammer': c_hammer,
+        'c_rs_short': c_rs_short, 'c_above_ma20': c_above_ma20, 'c_rev_momentum': c_rev_momentum,
+        'c_d_trend_down': c_d_trend_down, 'c_d_breakdown': c_d_breakdown,
+        'c_d_deep_bear': c_d_deep_bear, 'c_d_macd_bearish': c_d_macd_bearish,
+        'c_d_weak_close': c_d_weak_close,
+        'exit_c1': (v_close < v_ma10) & has_ma10,
+        'exit_c2': (v_open - v_close) > (0.015 * v_close) & (v_vol > v_vol_ma5 * 2.0),
+    }
+
+
+def _build_position(signals, technicals, data_dict, params, minervini_mode):
+    """
+    5. 部位重建 V3.1 (Position Reconstruction) + Dynamic Exposure 資金配置
+    從信號生成最終部位 DataFrame。
+
+    Returns:
+        dict: 包含 final_pos, hedge_factor, 以及用於 raw_mode 的輔助數據
+    """
+    p = params or {}
+    _min_score         = float(p.get('min_score',         4))
+    _max_per_industry  = int(p.get('max_per_industry',    0))
+    _time_stop_days    = int(p.get('time_stop_days',      0))
+    _trail_stop        = float(p.get('trail_stop',        0.18))
+
+    close = data_dict['close']
+    master_index = data_dict['master_index']
+    benchmark_close = data_dict['benchmark_close']
+
+    v_close = technicals['v_close']
+    v_hv_compressed = technicals['v_hv_compressed']
+    v_z_score = technicals['v_z_score']
+    v_macd_hist = technicals['v_macd_hist']
+    v_weekly_uptrend = technicals['v_weekly_uptrend']
+    v_rev_growth = technicals['v_rev_growth']
+    v_rev_current = technicals['v_rev_current']
+    v_rev_12m_max = technicals['v_rev_12m_max']
+    v_eps_sum = technicals['v_eps_sum']
+    v_op_income = technicals['v_op_income']
+    v_roe = technicals['v_roe']
+    v_op_margin = technicals['v_op_margin']
+    v_pe = technicals['v_pe']
+    v_inst_streak = technicals['v_inst_streak']
+    v_etf_ok = technicals['v_etf_ok']
+
+    sig_a = signals['sig_a']
+    sig_b = signals['sig_b']
+    sig_c = signals['sig_c']
+    sig_d = signals['sig_d']
+    sig_e = signals['sig_e']
+    long_entries_ab = signals['long_entries_ab']
+    long_exits_ab = signals['long_exits_ab']
+    exit_c = signals['exit_c']
+    exit_d = signals['exit_d']
+    exit_e = signals['exit_e']
+    score_c = signals['score_c']
+    score_d = signals['score_d']
+    score_e = signals['score_e']
+    c_strong_close = signals['c_strong_close']
+    c_rs = signals['c_rs']
+    c_bb_tight = signals['c_bb_tight']
+    c_full_minervini = signals['c_full_minervini']
+    c_rs_rank_70 = signals['c_rs_rank_70']
+    c_52w_new_high = signals['c_52w_new_high']
+    c_vol_dry = signals['c_vol_dry']
+
     # ==========================================
     # 5. 部位重建 V3.1 (Position Reconstruction)
     # ==========================================
@@ -630,18 +836,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     # Track C:  Signal C 動能追蹤 (出場: MA10 跌破 / 爆量長黑) — 更緊出場
     # 合併: np.maximum (任一信號仍看多則持有)
     # ==========================================
-
-    # [V3] Signal A 出場: 跌破 MA60 (給較大的波動空間)
-    exit_a = (v_close < v_ma60) & has_ma60
-
-    # [實驗] ATR 動態出場: close < (60日高點 - 3*ATR14)
-    if _atr_exit:
-        exit_atr = (v_close < v_trail_level) & (v_trail_level > 0)
-        exit_a = exit_a | exit_atr
-
-    # Signal A+B 統一出場
-    long_entries_ab = sig_a | sig_b
-    long_exits_ab = exit_a
 
     # [V3] 優化評分系統 (基本面全部在這裡, NaN→0 不會失敗)
     score = np.ones_like(v_close)
@@ -812,24 +1006,6 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
         import logging as _log
         _log.warning("WARNING: final_pos 全為 0，策略沒有任何信號觸發")
 
-    # --- raw_mode: 返回原始數據供外部資金配置測試 ---
-    if raw_mode:
-        sim_pos = final_pos
-        if sim_start is not None or sim_end is not None:
-            if sim_start and sim_end:
-                sim_pos = final_pos.loc[sim_start:sim_end]
-            elif sim_start:
-                sim_pos = final_pos.loc[sim_start:]
-            elif sim_end:
-                sim_pos = final_pos.loc[:sim_end]
-        return {
-            'final_pos': sim_pos,
-            'close': close,
-            'etf_close': benchmark_close,
-            'trail_stop': _trail_stop,
-            'max_concurrent': MAX_CONCURRENT_TOTAL,
-        }
-
     # ==========================================
     # 5.5 Dynamic Exposure 資金配置 (V3.5 WFO 驗證冠軍)
     # ==========================================
@@ -859,6 +1035,46 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     alloc_pos[long_mask_alloc] = alloc_pos[long_mask_alloc].mul(exposure, axis=0)[long_mask_alloc]
 
     final_pos = alloc_pos.replace([np.inf, -np.inf], 0).fillna(0)
+
+    return {
+        'final_pos': final_pos,
+        'hedge_factor': hedge_factor,
+        'MAX_CONCURRENT_TOTAL': MAX_CONCURRENT_TOTAL,
+    }
+
+
+def _run_simulation(final_pos, signals, technicals, data_dict, params,
+                    minervini_mode, stop_loss, take_profit, sim_start, sim_end,
+                    hedge_factor, max_concurrent_total):
+    """
+    6. 診斷 & 執行回測
+    記錄診斷日誌並呼叫 safe_finlab_sim 執行回測。
+
+    Returns:
+        backtest report 物件
+    """
+    p = params or {}
+    _trail_stop = float(p.get('trail_stop', 0.18))
+
+    benchmark_close = data_dict['benchmark_close']
+    close = data_dict['close']
+    master_index = data_dict['master_index']
+
+    v_bullish = signals['v_bullish']
+    v_bearish = signals['v_bearish']
+    v_liq = signals['v_liq']
+    v_etf_ok = technicals['v_etf_ok']
+    v_macd_hist = technicals['v_macd_hist']
+    v_hv_compressed = technicals['v_hv_compressed']
+    v_z_score = technicals['v_z_score']
+
+    sig_a = signals['sig_a']
+    sig_b = signals['sig_b']
+    sig_c = signals['sig_c']
+    sig_d = signals['sig_d']
+    long_exits_ab = signals['long_exits_ab']
+    exit_c = signals['exit_c']
+    exit_d = signals['exit_d']
 
     # ==========================================
     # 6. 診斷 & 執行回測
@@ -897,12 +1113,27 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
 
     non_zero_days = (final_pos.abs().sum(axis=1) > 0).sum()
     long_days = (final_pos > 0).any(axis=1).sum()
-    hedge_active_days = (hedge_factor < 1.0).sum() if 'hedge_factor' in dir() else 0
+    hedge_active_days = (hedge_factor < 1.0).sum()
     logging.info(f"有持倉的天數: {non_zero_days} / {len(final_pos)}")
     logging.info(f"有多頭持倉天數: {long_days}")
     logging.info(f"空頭避險啟動天數: {hedge_active_days}")
 
     # 各條件診斷
+    c_trend = signals['c_trend']
+    c_breakout = signals['c_breakout']
+    c_hv_ok = signals['c_hv_ok']
+    c_safe_supply = signals['c_safe_supply']
+    c_oversold = signals['c_oversold']
+    c_rsi_panic = signals['c_rsi_panic']
+    c_hammer = signals['c_hammer']
+    c_rs_short = signals['c_rs_short']
+    c_above_ma20 = signals['c_above_ma20']
+    c_rev_momentum = signals['c_rev_momentum']
+    c_d_trend_down = signals['c_d_trend_down']
+    c_d_breakdown = signals['c_d_breakdown']
+    c_d_deep_bear = signals['c_d_deep_bear']
+    c_d_macd_bearish = signals['c_d_macd_bearish']
+
     conditions_debug = {
         'v_bullish': v_bullish.sum(),
         'c_trend': c_trend.sum(),
@@ -918,8 +1149,8 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
         'c_above_ma20 (月線之上)': c_above_ma20.sum(),
         'c_rev_momentum (3月營收動能)': c_rev_momentum.sum(),
         'c_macd_positive (MACD多頭)': (v_macd_hist > 0).sum(),
-        'exit_c1 (跌破MA10)': exit_c1.sum(),
-        'exit_c2 (爆量長黑)': exit_c2.sum(),
+        'exit_c1 (跌破MA10)': signals['exit_c1'].sum(),
+        'exit_c2 (爆量長黑)': signals['exit_c2'].sum(),
         'v_bearish (空頭市場)': v_bearish.sum(),
         'c_d_trend_down (空頭排列)': c_d_trend_down.sum(),
         'c_d_breakdown (破20日低帶量)': c_d_breakdown.sum(),
@@ -943,7 +1174,7 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
             'name': f'Isaac V3.7{minervini_mode or ""}',
             'upload': False,
             'trail_stop': _trail_stop,
-            'position_limit': 1.0 / MAX_CONCURRENT_TOTAL,  # 每檔上限 = 1/N (10檔→10%)
+            'position_limit': 1.0 / max_concurrent_total,  # 每檔上限 = 1/N (10檔→10%)
             'touched_exit': False,
         }
         if stop_loss is not None:
@@ -1022,3 +1253,68 @@ def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mo
     except Exception as e:
         logging.error(f"策略層級崩潰: {str(e)}", exc_info=True)
         raise e
+
+
+def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mode='signal_e',
+                       params=None, sim_start=None, sim_end=None, raw_mode=False):
+    """
+    執行 Isaac V3.7 策略回測。
+    V3.7: Signal D 轉避險指標 + Score Weight + Dynamic Exposure
+
+    params (dict, 可選): 覆蓋預設參數
+        trail_stop       (float) : 追蹤停損比例，預設 0.18
+        rsi_threshold    (int)   : Signal B RSI 超賣門檻，預設 28
+        volume_mult      (float) : 突破量能倍率（Signal A/B），預設 1.5
+        supply_danger_pct(float) : 供給區安全距離，預設 0.97
+        liq_min          (int)   : 流動性門檻（均量股數），預設 500000
+    sim_start (str): 回測起始日 (YYYY-MM-DD)，用於 WFO 窗口
+    sim_end   (str): 回測結束日 (YYYY-MM-DD)，用於 WFO 窗口
+    raw_mode (bool): 若 True，不執行 sim，返回 final_pos 和相關數據供外部配置
+    """
+    if stop_loss is not None: stop_loss = float(stop_loss)
+    if take_profit is not None: take_profit = float(take_profit)
+
+    # --- 可調參數 (WFO 網格搜索的優化目標) ---
+    p = params or {}
+
+    # Step 1: 數據抓取
+    data_dict = _fetch_data(api_token)
+
+    # Step 2: 技術指標計算
+    technicals = _compute_technicals(data_dict)
+
+    # Step 3: 信號生成
+    signals = _generate_signals(technicals, data_dict, p, minervini_mode)
+
+    # Step 4: 部位建構
+    position_result = _build_position(signals, technicals, data_dict, p, minervini_mode)
+    final_pos = position_result['final_pos']
+    hedge_factor = position_result['hedge_factor']
+    max_concurrent_total = position_result['MAX_CONCURRENT_TOTAL']
+
+    # --- raw_mode: 返回原始數據供外部資金配置測試 ---
+    if raw_mode:
+        _trail_stop = float(p.get('trail_stop', 0.18))
+        sim_pos = final_pos
+        if sim_start is not None or sim_end is not None:
+            if sim_start and sim_end:
+                sim_pos = final_pos.loc[sim_start:sim_end]
+            elif sim_start:
+                sim_pos = final_pos.loc[sim_start:]
+            elif sim_end:
+                sim_pos = final_pos.loc[:sim_end]
+        return {
+            'final_pos': sim_pos,
+            'close': data_dict['close'],
+            'etf_close': data_dict['benchmark_close'],
+            'trail_stop': _trail_stop,
+            'max_concurrent': max_concurrent_total,
+        }
+
+    # Step 5: 執行回測
+    report = _run_simulation(
+        final_pos, signals, technicals, data_dict, p,
+        minervini_mode, stop_loss, take_profit, sim_start, sim_end,
+        hedge_factor, max_concurrent_total,
+    )
+    return report

@@ -57,8 +57,8 @@ def _fetch_prices_batch(tickers_tuple):
                     prices[code] = float(close)
             if prices:
                 source_label = "SinoPac"
-    except Exception:
-        pass
+    except (ConnectionError, TimeoutError, AttributeError) as e:
+        logger.debug(f"SinoPac 即時報價失敗: {e}")
 
     # Phase 2: 補齊缺失的 ticker（YFinance fallback）
     missing = [t for t in tickers_tuple if t not in prices]
@@ -70,14 +70,14 @@ def _fetch_prices_batch(tickers_tuple):
                     df = provider.get_historical_data(ticker, period="5d", interval="1d")
                     if df is not None and not df.empty and 'Close' in df.columns:
                         prices[ticker] = float(df['Close'].iloc[-1])
-                except Exception:
-                    pass
+                except (ConnectionError, TimeoutError, KeyError, IndexError) as e:
+                    logger.debug(f"YFinance 報價失敗 ({ticker}): {e}")
             if source_label == "N/A" and prices:
                 source_label = "YFinance"
             elif missing and any(t in prices for t in missing):
                 source_label = f"{source_label}+YFinance" if source_label != "N/A" else "YFinance"
-        except Exception:
-            pass
+        except (ImportError, ConnectionError) as e:
+            logger.warning(f"YFinance fallback 報價失敗: {e}")
 
     return prices, source_label
 
@@ -137,7 +137,8 @@ def _load_paper_positions():
             'today_pnl': today_pnl,
             'n_positions': len(positions),
         }
-    except Exception:
+    except Exception as e:
+        logger.warning(f"載入持倉資料失敗: {e}")
         return {
             'positions': [], 'equity': 0, 'cash': 0,
             'initial': 1_000_000, 'today_pnl': 0, 'n_positions': 0,
@@ -151,7 +152,8 @@ def _load_scan_signals():
         if isinstance(data, list):
             return data
         return data.get('signals', data.get('results', []))
-    except Exception:
+    except (TypeError, KeyError, AttributeError) as e:
+        logger.warning(f"載入掃描結果失敗: {e}")
         return []
 
 
@@ -167,10 +169,11 @@ def _load_calendar_events():
                 evt_date = datetime.strptime(evt.get('date', ''), '%Y-%m-%d').date()
                 if today <= evt_date <= end:
                     upcoming.append(evt)
-            except Exception:
+            except (ValueError, TypeError):
                 continue
         return upcoming
-    except Exception:
+    except (ImportError, AttributeError) as e:
+        logger.debug(f"載入行事曆失敗: {e}")
         return []
 
 
@@ -184,7 +187,8 @@ def _load_pending_orders():
         # Also check for orders with status 'submitted' (pending)
         pending = [o for o in orders if o.get('status') == 'submitted']
         return today_orders, pending
-    except Exception:
+    except (TypeError, KeyError, AttributeError) as e:
+        logger.warning(f"載入委託記錄失敗: {e}")
         return [], []
 
 
@@ -471,6 +475,6 @@ def _calc_pnl_pct(p):
         entry = p.get('entry_price', 0)
         if entry > 0:
             return (cur - entry) / entry * 100
-    except Exception:
+    except (TypeError, ZeroDivisionError):
         pass
     return 0

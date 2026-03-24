@@ -138,7 +138,8 @@ def calculate_portfolio_beta(positions, provider, benchmark_ticker='^TWII', peri
         if bench_df is None or bench_df.empty:
             return None
         bench_ret = bench_df['Close'].pct_change().dropna()
-    except Exception:
+    except (ConnectionError, TimeoutError, KeyError, ValueError) as e:
+        logger.warning(f"Beta 計算: 取得基準指數 {benchmark_ticker} 失敗 - {type(e).__name__}: {e}")
         return None
 
     betas = {}
@@ -169,7 +170,8 @@ def calculate_portfolio_beta(positions, provider, benchmark_ticker='^TWII', peri
 
             betas[ticker] = round(float(beta), 3)
             weights[ticker] = value
-        except Exception:
+        except (ConnectionError, TimeoutError, KeyError, ValueError, IndexError) as e:
+            logger.warning(f"Beta 計算: {ticker} 失敗 - {type(e).__name__}: {e}")
             continue
 
     if not betas or total_value <= 0:
@@ -246,7 +248,8 @@ def calculate_var(positions, provider, confidence=0.95, period='6mo', horizon_da
             if min_len > 0:
                 returns_list[0] = returns_list[0][-min_len:]
                 returns_list.append(position_returns[-min_len:])
-        except Exception:
+        except (ConnectionError, TimeoutError, KeyError, ValueError, IndexError) as e:
+            logger.warning(f"VaR 計算: {ticker} 報酬率計算失敗 - {type(e).__name__}: {e}")
             continue
 
     if not returns_list or total_value <= 0:
@@ -332,7 +335,8 @@ def stress_test(positions, provider, scenarios=None):
         try:
             df = provider.get_historical_data(ticker, period='5d', interval='1d')
             price = float(df['Close'].iloc[-1]) if df is not None and not df.empty else pos.get('entry_price', 0)
-        except Exception:
+        except (ConnectionError, TimeoutError, KeyError, IndexError) as e:
+            logger.debug(f"壓力測試: {ticker} 取得即時價失敗: {e}")
             price = pos.get('entry_price', 0)
         value = price * shares
         total_value += value

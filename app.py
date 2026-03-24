@@ -24,6 +24,17 @@ with st.sidebar:
     st.markdown('<div class="cyber-title" style="font-size:1.2rem;">全域量化終端</div>', unsafe_allow_html=True)
     st.markdown('<div class="cyber-subtitle" style="font-size:0.7rem;">v200 CYBER TERMINAL</div>', unsafe_allow_html=True)
 
+    # --- Quick Search Bar (P4-3) ---
+    quick_search = st.text_input(
+        "🔍 快速搜尋",
+        placeholder="股票代碼或名稱 (如 2330, NVDA, 台積電)",
+        label_visibility="collapsed",
+        key="global_search",
+    )
+    if quick_search and quick_search.strip():
+        st.session_state['pending_analysis'] = quick_search.strip()
+        st.session_state['_force_research'] = True
+
     app_mode = st.radio(
         "nav",
         [
@@ -35,6 +46,11 @@ with st.sidebar:
         ],
         label_visibility="collapsed",
     )
+
+    # Override navigation if search triggered
+    if st.session_state.get('_force_research'):
+        app_mode = "🔍 研究分析"
+        st.session_state['_force_research'] = False
 
     # --- API Keys from secrets.toml ---
     def _get_secret(key, fallback=""):

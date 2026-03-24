@@ -1,8 +1,10 @@
 import re
+import logging
 import requests
-import streamlit as st
 
 from utils.helpers import robust_json_extract
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_ticker_and_market(query, client=None, gemini_model=None):
@@ -20,8 +22,8 @@ def resolve_ticker_and_market(query, client=None, gemini_model=None):
             for item in data:
                 if query in item.get('Name', '') or query == item.get('Code', ''):
                     return item['Code'], "🇹🇼 台股 (TW)", item['Name']
-    except Exception:
-        pass
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        logger.debug(f"TWSE API 查詢失敗: {e}")
 
     try:
         res_tpex = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes", timeout=3)
@@ -30,8 +32,8 @@ def resolve_ticker_and_market(query, client=None, gemini_model=None):
             for item in data:
                 if query in item.get('CompanyName', '') or query == item.get('SecuritiesCompanyCode', ''):
                     return item['SecuritiesCompanyCode'], "🇹🇼 台股 (TW)", item['CompanyName']
-    except Exception:
-        pass
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        logger.debug(f"TPEx API 查詢失敗: {e}")
 
     if not client:
         return None, None, None
@@ -43,7 +45,7 @@ def resolve_ticker_and_market(query, client=None, gemini_model=None):
             return data['ticker'], "🇹🇼 台股 (TW)" if data['market'] == "TW" else "🗽 美股 (US)", data.get('name', query)
         return None, None, None
     except Exception as e:
-        st.sidebar.error(f"AI 翻譯失敗: {e}")
+        logger.error(f"AI 翻譯失敗: {e}")
         return None, None, None
 
 
@@ -83,7 +85,8 @@ def detect_hot_themes(market, client=None, gemini_model=None):
     try:
         res = client.models.generate_content(model=gemini_model, contents=prompt)
         return robust_json_extract(res.text) or []
-    except Exception:
+    except Exception as e:
+        logger.warning(f"AI 熱門族群偵測失敗: {e}")
         return []
 
 
@@ -94,7 +97,8 @@ def generate_supply_chain_structure(market, keyword, client=None, gemini_model=N
     try:
         res = client.models.generate_content(model=gemini_model, contents=prompt)
         return robust_json_extract(res.text)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"AI 產業鏈生成失敗: {e}")
         return None
 
 

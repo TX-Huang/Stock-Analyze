@@ -27,17 +27,20 @@ def get_institutional_data(api_token=None):
         # 三大法人買賣超 (股數)
         try:
             result['foreign_buy'] = data.get('institutional_investors:外資買賣超股數')
-        except Exception:
+        except (KeyError, ValueError, ConnectionError) as e:
+            logger.warning(f"取得外資買賣超資料失敗: {e}")
             result['foreign_buy'] = None
 
         try:
             result['trust_buy'] = data.get('institutional_investors:投信買賣超股數')
-        except Exception:
+        except (KeyError, ValueError, ConnectionError) as e:
+            logger.warning(f"取得投信買賣超資料失敗: {e}")
             result['trust_buy'] = None
 
         try:
             result['dealer_buy'] = data.get('institutional_investors:自營商買賣超股數')
-        except Exception:
+        except (KeyError, ValueError, ConnectionError) as e:
+            logger.warning(f"取得自營商買賣超資料失敗: {e}")
             result['dealer_buy'] = None
 
         # 融資融券
@@ -45,7 +48,8 @@ def get_institutional_data(api_token=None):
             result['margin_buy'] = data.get('margin_trading:融資買進')
             result['margin_sell'] = data.get('margin_trading:融資賣出')
             result['margin_balance'] = data.get('margin_trading:融資餘額')
-        except Exception:
+        except (KeyError, ValueError, ConnectionError) as e:
+            logger.warning(f"取得融資資料失敗: {e}")
             result['margin_buy'] = None
             result['margin_sell'] = None
             result['margin_balance'] = None
@@ -54,7 +58,8 @@ def get_institutional_data(api_token=None):
             result['short_sell'] = data.get('margin_trading:融券賣出')
             result['short_cover'] = data.get('margin_trading:融券買進')
             result['short_balance'] = data.get('margin_trading:融券餘額')
-        except Exception:
+        except (KeyError, ValueError, ConnectionError) as e:
+            logger.warning(f"取得融券資料失敗: {e}")
             result['short_sell'] = None
             result['short_cover'] = None
             result['short_balance'] = None

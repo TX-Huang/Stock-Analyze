@@ -5,7 +5,6 @@
 """
 import numpy as np
 import pandas as pd
-import streamlit as st
 import logging
 from datetime import datetime
 
@@ -252,24 +251,25 @@ def _score_risk(df, position, portfolio_tickers):
             score += 1.0
             details.append(f"近 60 日回撤 {dd:.1f}%")
 
-    # 3. VIX check (from market tape cache)
-    try:
-        from ui.components import _fetch_market_indices, MARKET_TICKERS
-        indices = _fetch_market_indices()
-        vix_idx = next((i for i, t in enumerate(MARKET_TICKERS) if t['symbol'] == '^VIX'), None)
-        if vix_idx is not None and indices[vix_idx]:
-            vix = indices[vix_idx]['price']
-            if vix > 30:
-                score += 1.5
-                details.append(f"VIX {vix:.1f} (恐慌)")
-            elif vix > 25:
-                score += 0.5
-                details.append(f"VIX {vix:.1f} (偏高)")
-            elif vix < 15:
-                score -= 0.5
-                details.append(f"VIX {vix:.1f} (平穩)")
-    except Exception:
-        pass
+    # 3. VIX check (passed in via signal_data or external caller)
+    # Removed dependency on ui.components; VIX data should be provided externally
+    # via signal_data['vix'] if available
+    if signal_data:
+        vix = signal_data.get('vix')
+        if vix is not None:
+            try:
+                vix = float(vix)
+                if vix > 30:
+                    score += 1.5
+                    details.append(f"VIX {vix:.1f} (恐慌)")
+                elif vix > 25:
+                    score += 0.5
+                    details.append(f"VIX {vix:.1f} (偏高)")
+                elif vix < 15:
+                    score -= 0.5
+                    details.append(f"VIX {vix:.1f} (平穩)")
+            except (ValueError, TypeError):
+                pass
 
     # 4. Position concentration risk
     if position and position.get('shares', 0) > 0:
@@ -290,8 +290,8 @@ def _score_risk(df, position, portfolio_tickers):
                 elif weight > 10:
                     score += 0.5
                     details.append(f"單一持倉占比 {weight:.0f}%")
-        except Exception:
-            pass
+        except (ImportError, FileNotFoundError, KeyError, TypeError) as e:
+            logger.debug(f"持倉集中度計算失敗: {e}")
 
     score = round(max(0, min(10, score)), 1)
     return {'score': score, 'details': details}
@@ -360,8 +360,8 @@ def _compute_action(df, price, levels, position):
                 shares = int(max_risk / risk_per_share)
                 # Round to lot (台股零股也可以，但建議整數)
                 action['suggested_shares'] = max(1, shares)
-    except Exception:
-        pass
+    except (ImportError, FileNotFoundError, KeyError, TypeError) as e:
+        logger.debug(f"建議股數計算失敗: {e}")
 
     # Action type
     if position:
@@ -396,7 +396,8 @@ def _calc_atr(df, period=14):
                                    abs(low[1:] - close[:-1])))
         atr = float(np.mean(tr[-period:]))
         return atr
-    except Exception:
+    except (KeyError, IndexError, ValueError, TypeError) as e:
+        logger.debug(f"ATR 計算失敗: {e}")
         return 0
 
 
@@ -422,7 +423,6 @@ def _empty_thesis():
 # Layer 2: AI Narrator (Gemini, Optional)
 # ==========================================
 
-@st.cache_data(ttl=1800, show_spinner=False)
 def generate_ai_narrative(ticker, thesis_json, _client=None):
     """
     用 Gemini 生成自然語言交易解讀（快取 30 分鐘）。
