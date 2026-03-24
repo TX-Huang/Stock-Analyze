@@ -158,32 +158,8 @@ def _render_strategy_manager():
                     f.write(source)
                 st.success(f"已儲存: strategies/custom/{uploaded.name}")
 
-    # ── 內建策略清單（僅展示，不可刪除）──
+    # ── 自訂策略管理（內建策略不顯示）──
     strat_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'strategies')
-    all_files = sorted(glob.glob(os.path.join(strat_dir, '*.py')))
-
-    # 不應顯示的工具/測試檔
-    _SKIP = {'__init__.py', 'template.py', 'advanced_test.py', 'allocation_test.py',
-             'decay_test.py', 'monte_carlo.py', 'opt_test.py', 'rotation_test.py',
-             'round3_test.py', 'v37_validation.py'}
-
-    builtin_files = [f for f in all_files if os.path.basename(f) not in _SKIP]
-    if builtin_files:
-        st.markdown("#### 內建策略檔案")
-        st.caption("以下為系統內建策略，供回測及交易功能使用，無法刪除。")
-        for fp in builtin_files:
-            fname = os.path.basename(fp)
-            st.markdown(
-                f'<div style="display:flex;align-items:center;padding:6px 14px;margin-bottom:3px;'
-                f'background:rgba(0,240,255,0.03);border-radius:6px;border-left:3px solid #334155">'
-                f'<span style="font-size:0.8rem;color:#94a3b8;font-family:JetBrains Mono,monospace">'
-                f'strategies/{fname}</span>'
-                f'<span class="tag" style="font-size:0.55rem;background:#1e293b;color:#64748b;margin-left:8px">內建</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-    # ── 自訂策略（可刪除）──
     custom_dir = os.path.join(strat_dir, 'custom')
     os.makedirs(custom_dir, exist_ok=True)
     custom_files = sorted(glob.glob(os.path.join(custom_dir, '*.py')))
