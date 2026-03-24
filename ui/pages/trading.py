@@ -149,46 +149,65 @@ def _render_strategy_manager():
             for iss in issues:
                 st.error(f"❌ {iss}")
         else:
-            dest = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                'strategies', uploaded.name)
-            if st.button(f"儲存到 strategies/{uploaded.name}", type="primary"):
+            custom_dest_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                           'strategies', 'custom')
+            os.makedirs(custom_dest_dir, exist_ok=True)
+            dest = os.path.join(custom_dest_dir, uploaded.name)
+            if st.button(f"儲存到 strategies/custom/{uploaded.name}", type="primary"):
                 with open(dest, 'w', encoding='utf-8') as f:
                     f.write(source)
-                st.success(f"已儲存: strategies/{uploaded.name}")
+                st.success(f"已儲存: strategies/custom/{uploaded.name}")
 
-    # List ALL strategy files (including built-in)
+    # ── 內建策略清單（僅展示，不可刪除）──
     strat_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'strategies')
     all_files = sorted(glob.glob(os.path.join(strat_dir, '*.py')))
-    skip = {'__init__.py', 'template.py'}  # Only skip non-strategy files
 
-    # Core strategies that other modules depend on
-    CORE_STRATEGIES = {'isaac.py', 'vcp.py'}
-    DEPENDENT_FILES = {
-        'isaac.py': '每日精選、自動交易、模擬交易',
-        'vcp.py': '突破偵測 VCP 分析',
-    }
+    # 不應顯示的工具/測試檔
+    _SKIP = {'__init__.py', 'template.py', 'advanced_test.py', 'allocation_test.py',
+             'decay_test.py', 'monte_carlo.py', 'opt_test.py', 'rotation_test.py',
+             'round3_test.py', 'v37_validation.py'}
 
-    strat_files = [f for f in all_files if os.path.basename(f) not in skip]
-    if strat_files:
-        st.markdown("#### 策略檔案管理")
+    builtin_files = [f for f in all_files if os.path.basename(f) not in _SKIP]
+    if builtin_files:
+        st.markdown("#### 內建策略檔案")
+        st.caption("以下為系統內建策略，供回測及交易功能使用，無法刪除。")
+        for fp in builtin_files:
+            fname = os.path.basename(fp)
+            st.markdown(
+                f'<div style="display:flex;align-items:center;padding:6px 14px;margin-bottom:3px;'
+                f'background:rgba(0,240,255,0.03);border-radius:6px;border-left:3px solid #334155">'
+                f'<span style="font-size:0.8rem;color:#94a3b8;font-family:JetBrains Mono,monospace">'
+                f'strategies/{fname}</span>'
+                f'<span class="tag" style="font-size:0.55rem;background:#1e293b;color:#64748b;margin-left:8px">內建</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-        # Ensure backup directory exists
+    # ── 自訂策略（可刪除）──
+    custom_dir = os.path.join(strat_dir, 'custom')
+    os.makedirs(custom_dir, exist_ok=True)
+    custom_files = sorted(glob.glob(os.path.join(custom_dir, '*.py')))
+
+    st.markdown("#### 自訂策略管理")
+    if custom_files:
         backup_dir = os.path.join(strat_dir, '.backup')
         os.makedirs(backup_dir, exist_ok=True)
 
-        for fp in strat_files:
+        for fp in custom_files:
             fname = os.path.basename(fp)
-            is_core = fname in CORE_STRATEGIES
             c1, c2 = st.columns([6, 1])
-            core_badge = ' <span class="tag tag-warn" style="font-size:0.6rem">核心</span>' if is_core else ''
-            c1.markdown(f'`strategies/{fname}`{core_badge}', unsafe_allow_html=True)
+            c1.markdown(
+                f'<div style="padding:6px 14px;background:rgba(139,92,246,0.06);border-radius:6px;'
+                f'border-left:3px solid #8b5cf6;font-size:0.8rem;font-family:JetBrains Mono,monospace;color:#e2e8f0">'
+                f'custom/{fname}'
+                f'<span class="tag tag-new" style="font-size:0.55rem;margin-left:8px">自訂</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
             if c2.button("🗑️", key=f"del_{fname}", help=f"刪除 {fname}"):
                 st.session_state[f'_confirm_del_{fname}'] = True
 
-            # Two-step confirmation
             if st.session_state.get(f'_confirm_del_{fname}'):
-                if is_core:
-                    st.error(f"⚠️ **{fname}** 是核心策略，被以下功能使用：{DEPENDENT_FILES.get(fname, '未知')}。刪除後這些功能將無法運作！")
                 st.warning(f"確定要刪除 **{fname}** 嗎？檔案會備份到 `strategies/.backup/`，可隨時還原。")
                 cc1, cc2 = st.columns(2)
                 if cc1.button(f"確認刪除 {fname}", key=f"confirm_{fname}", type="primary"):
@@ -203,18 +222,24 @@ def _render_strategy_manager():
                 if cc2.button("取消", key=f"cancel_{fname}"):
                     st.session_state.pop(f'_confirm_del_{fname}', None)
                     st.rerun()
+    else:
+        st.caption("目前無自訂策略。上傳 .py 後會存入 `strategies/custom/`。")
 
-        # Show backups
-        backup_files = sorted(glob.glob(os.path.join(backup_dir, '*.py')))
-        if backup_files:
-            with st.expander(f"🗄️ 備份區（{len(backup_files)} 個檔案）"):
-                for bp in backup_files:
-                    bname = os.path.basename(bp)
-                    bc1, bc2 = st.columns([6, 1])
-                    bc1.markdown(f'<span style="font-size:0.75rem;color:#64748b">`{bname}`</span>', unsafe_allow_html=True)
-                    if bc2.button("還原", key=f"restore_{bname}"):
-                        import shutil
-                        original_name = '_'.join(bname.split('_')[2:])  # Remove timestamp prefix
-                        shutil.copy2(bp, os.path.join(strat_dir, original_name))
-                        st.success(f"已還原: {original_name}")
-                        st.rerun()
+    # Show backups
+    backup_dir = os.path.join(strat_dir, '.backup')
+    os.makedirs(backup_dir, exist_ok=True)
+    backup_files = sorted(glob.glob(os.path.join(backup_dir, '*.py')))
+    if backup_files:
+        with st.expander(f"🗄️ 備份區（{len(backup_files)} 個檔案）"):
+            for bp in backup_files:
+                bname = os.path.basename(bp)
+                bc1, bc2 = st.columns([6, 1])
+                bc1.markdown(f'<span style="font-size:0.75rem;color:#64748b">`{bname}`</span>', unsafe_allow_html=True)
+                if bc2.button("還原", key=f"restore_{bname}"):
+                    import shutil
+                    restore_dir = os.path.join(strat_dir, 'custom')
+                    os.makedirs(restore_dir, exist_ok=True)
+                    original_name = '_'.join(bname.split('_')[2:])  # Remove timestamp prefix
+                    shutil.copy2(bp, os.path.join(restore_dir, original_name))
+                    st.success(f"已還原至 strategies/custom/{original_name}")
+                    st.rerun()

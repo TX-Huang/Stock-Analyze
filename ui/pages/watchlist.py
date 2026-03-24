@@ -81,21 +81,42 @@ def render(_embedded=False):
         add_clicked = st.button("➕ 加入", use_container_width=True, key="wl_add_btn")
 
     if add_clicked and new_ticker.strip():
-        ticker_clean = new_ticker.strip().upper()
-        # Try to get name from provider
-        try:
-            market = "TW" if _is_tw_ticker(ticker_clean) else "US"
-            provider = get_data_provider("auto", market_type=market)
-            info = provider.get_stock_info(ticker_clean)
-            name = info.get("name", ticker_clean)
-        except Exception:
-            name = ticker_clean
+        raw_input = new_ticker.strip()
 
-        if wm.add(ticker_clean, name=name, group=selected_group):
-            st.success(f"已加入 {ticker_clean} ({name}) 到 [{selected_group}]")
-            st.rerun()
+        # 判斷是否為純代碼（數字=台股、英文=美股）
+        if _is_tw_ticker(raw_input):
+            ticker_clean = raw_input
+            try:
+                provider = get_data_provider("auto", market_type="TW")
+                info = provider.get_stock_info(ticker_clean)
+                name = info.get("name", ticker_clean)
+            except Exception:
+                name = ticker_clean
+        elif re.match(r'^[A-Za-z]{1,5}$', raw_input):
+            ticker_clean = raw_input.upper()
+            try:
+                provider = get_data_provider("auto", market_type="US")
+                info = provider.get_stock_info(ticker_clean)
+                name = info.get("name", ticker_clean)
+            except Exception:
+                name = ticker_clean
         else:
-            st.warning(f"{ticker_clean} 已在自選股中")
+            # 中文名稱或其他 → 用 resolve_ticker_and_market 解析
+            with cyber_spinner("RESOLVING", f"搜尋「{raw_input}」..."):
+                from analysis.ai_core import resolve_ticker_and_market
+                ticker_clean, detected_market, name = resolve_ticker_and_market(raw_input)
+            if not ticker_clean:
+                st.error(f"找不到「{raw_input}」對應的股票代碼，請直接輸入代碼（如 2488）")
+                ticker_clean = None
+            else:
+                st.info(f"已識別：{name}（{ticker_clean}）")
+
+        if ticker_clean:
+            if wm.add(ticker_clean, name=name, group=selected_group):
+                st.success(f"已加入 {ticker_clean} ({name}) 到 [{selected_group}]")
+                st.rerun()
+            else:
+                st.warning(f"{ticker_clean} 已在自選股中")
 
     st.markdown("---")
 
