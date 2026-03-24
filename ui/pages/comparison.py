@@ -5,6 +5,9 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 import logging
+import os
+import ast
+import importlib
 
 from ui.theme import _plotly_dark_layout
 from ui.components import cyber_kpi_strip
@@ -19,15 +22,93 @@ AMBER = "#f59e0b"
 PURPLE = "#a855f7"
 SLATE = "#94a3b8"
 
-# Strategy registry: display_name -> (module_path, function_name)
-STRATEGY_REGISTRY = {
+# Built-in strategy registry: display_name -> (module_path, function_name)
+_BUILTIN_STRATEGIES = {
     "Isaac V3.7": ("strategies.isaac", "run_isaac_strategy"),
     "VCP": ("strategies.vcp", "run_vcp_strategy"),
+    "Will VCP": ("strategies.will_vcp", "run_will_vcp_strategy"),
     "Minervini": ("strategies.minervini", "run_minervini_strategy"),
     "Momentum": ("strategies.momentum", "run_momentum_strategy"),
     "Elder": ("strategies.elder", "run_elder_strategy"),
     "Candlestick": ("strategies.candlestick", "run_candlestick_strategy"),
 }
+
+
+def _discover_custom_strategies():
+    """
+    掃描 strategies/custom/ 目錄，找出包含 run_strategy() 的 .py 檔案。
+    回傳 dict: display_name -> (module_path, function_name)
+    """
+    custom = {}
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    custom_dir = os.path.join(base_dir, "strategies", "custom")
+
+    if not os.path.isdir(custom_dir):
+        return custom
+
+    # 確保 strategies/custom/__init__.py 存在
+    init_path = os.path.join(custom_dir, "__init__.py")
+    if not os.path.exists(init_path):
+        try:
+            with open(init_path, "w") as f:
+                f.write("")
+        except Exception:
+            pass
+
+    for fname in sorted(os.listdir(custom_dir)):
+        if not fname.endswith(".py") or fname.startswith("_"):
+            continue
+
+        fpath = os.path.join(custom_dir, fname)
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source)
+            func_names = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+
+            # 優先找 run_strategy，其次找 run_*_strategy
+            if "run_strategy" in func_names:
+                func_name = "run_strategy"
+            else:
+                candidates = [fn for fn in func_names if fn.startswith("run_") and fn.endswith("_strategy")]
+                if candidates:
+                    func_name = candidates[0]
+                else:
+                    continue
+
+            module_name = fname.replace(".py", "")
+            display_name = f"📂 {module_name}"
+            mod_path = f"strategies.custom.{module_name}"
+            custom[display_name] = (mod_path, func_name)
+        except Exception as e:
+            logger.debug(f"Skipping {fname}: {e}")
+
+    return custom
+
+
+def _get_session_uploaded_strategies():
+    """
+    從 session_state 取得回測頁面上傳但尚未儲存到磁碟的策略。
+    回傳 dict: display_name -> module object (直接呼叫)
+    """
+    uploaded = {}
+    mod = st.session_state.get("_custom_strategy_module")
+    if mod and hasattr(mod, "run_strategy"):
+        name = getattr(mod, "__name__", "uploaded_strategy")
+        uploaded[f"⬆️ {name} (暫存)"] = mod
+    return uploaded
+
+
+def _build_strategy_registry():
+    """
+    合併內建 + custom 資料夾 + session 上傳策略，回傳完整 registry。
+    """
+    registry = dict(_BUILTIN_STRATEGIES)
+    registry.update(_discover_custom_strategies())
+    return registry
+
+
+STRATEGY_REGISTRY = _build_strategy_registry()
 
 # KPI definitions: (key_in_stats, display_name, format_str, higher_is_better)
 KPI_DEFS = [
@@ -45,7 +126,12 @@ def render_comparison():
     st.markdown("### :balance_scale: 策略 A/B 比較")
     st.caption("並排比較兩個策略的回測表現，找出最適合你的交易系統")
 
-    strategy_names = list(STRATEGY_REGISTRY.keys())
+    # 每次渲染時重新掃描，確保新上傳的策略立即可見
+    global STRATEGY_REGISTRY
+    STRATEGY_REGISTRY = _build_strategy_registry()
+    session_uploaded = _get_session_uploaded_strategies()
+
+    strategy_names = list(STRATEGY_REGISTRY.keys()) + list(session_uploaded.keys())
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -93,13 +179,23 @@ def _run_comparison(name_a, name_b, api_token):
 
 def _run_strategy(name, api_token, label=""):
     """Run a single strategy and return (stats, trades, equity)."""
-    mod_path, func_name = STRATEGY_REGISTRY[name]
+    session_uploaded = _get_session_uploaded_strategies()
+
     with st.spinner(f"策略 {label} ({name}) 回測中..."):
         try:
-            import importlib
-            mod = importlib.import_module(mod_path)
-            func = getattr(mod, func_name)
-            report = func(api_token)
+            if name in session_uploaded:
+                # Session-uploaded module: call run_strategy directly
+                mod = session_uploaded[name]
+                report = mod.run_strategy(api_token)
+            elif name in STRATEGY_REGISTRY:
+                mod_path, func_name = STRATEGY_REGISTRY[name]
+                mod = importlib.import_module(mod_path)
+                importlib.reload(mod)  # 確保載入最新版本
+                func = getattr(mod, func_name)
+                report = func(api_token)
+            else:
+                st.error(f"找不到策略: {name}")
+                return None
             stats = report.get_stats()
             trades = report.get_trades()
             equity = _extract_equity(report)

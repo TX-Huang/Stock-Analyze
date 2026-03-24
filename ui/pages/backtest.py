@@ -176,6 +176,17 @@ def render(_embedded=False):
                                 st.error("找不到 `run_strategy(api_token)` 函式。"); st.stop()
                             report = module.run_strategy(finlab_token)
                             st.session_state['_custom_strategy_module'] = module
+
+                            # 同步儲存到 strategies/custom/ 讓 A/B 比較頁可用
+                            custom_dir = os.path.join(base_dir, 'strategies', 'custom')
+                            os.makedirs(custom_dir, exist_ok=True)
+                            init_p = os.path.join(custom_dir, '__init__.py')
+                            if not os.path.exists(init_p):
+                                open(init_p, 'w').close()
+                            perm_path = os.path.join(custom_dir, uploaded_file.name)
+                            with open(perm_path, 'wb') as pf:
+                                pf.write(uploaded_file.getbuffer())
+                            st.toast(f"✅ 策略已同步到 strategies/custom/{uploaded_file.name}，可在 A/B 比較中選用")
                         finally:
                             if os.path.exists(temp_fn): os.remove(temp_fn)
                     else:
