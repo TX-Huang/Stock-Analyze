@@ -1,6 +1,6 @@
 """
 Telegram 通知工具
-用於策略回測結果的自動通知。
+用於策略回測結果的自動通知，支援多用戶訂閱推送。
 
 設定方式:
 1. 在 Telegram 找 @BotFather，建立新 Bot 取得 BOT_TOKEN
@@ -10,10 +10,20 @@ Telegram 通知工具
    TELEGRAM_CHAT_ID = "你的Chat ID"
 """
 
+import os
+import time
 import requests
 import logging
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+# Subscriber storage path
+from config.paths import SUBSCRIBERS_PATH
+
+_SUBSCRIBERS_FILE = SUBSCRIBERS_PATH
+
+TW_TZ = timezone(timedelta(hours=8))
 
 
 def _load_telegram_config():
@@ -41,9 +51,193 @@ def _load_telegram_config():
     return None, None
 
 
+def _get_bot_token():
+    """只取得 bot token（不需要 chat_id）。"""
+    try:
+        import toml
+        secrets = toml.load('.streamlit/secrets.toml')
+        token = secrets.get('TELEGRAM_BOT_TOKEN', '')
+        if token:
+            return token
+    except Exception:
+        pass
+    try:
+        import streamlit as st
+        token = st.secrets.get('TELEGRAM_BOT_TOKEN', '')
+        if token:
+            return token
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Subscriber management
+# ---------------------------------------------------------------------------
+
+def get_subscribers():
+    """
+    讀取訂閱者清單。
+
+    Returns:
+        list[dict]: 每個 dict 包含 {chat_id, name, subscribed_at}
+    """
+    from utils.helpers import safe_json_read
+    data = safe_json_read(_SUBSCRIBERS_FILE, default=[])
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+def add_subscriber(chat_id, name=""):
+    """
+    新增訂閱者。如果 chat_id 已存在則更新 name。
+
+    Args:
+        chat_id: Telegram chat ID (str or int)
+        name: 訂閱者名稱（選填）
+
+    Returns:
+        bool: 是否為新增（True）或更新（False）
+    """
+    from utils.helpers import safe_json_read, safe_json_write
+    subscribers = safe_json_read(_SUBSCRIBERS_FILE, default=[])
+    if not isinstance(subscribers, list):
+        subscribers = []
+
+    chat_id_str = str(chat_id)
+
+    # Check if already exists
+    for sub in subscribers:
+        if str(sub.get('chat_id', '')) == chat_id_str:
+            if name:
+                sub['name'] = name
+            safe_json_write(_SUBSCRIBERS_FILE, subscribers)
+            logger.info(f"訂閱者已更新: {chat_id_str} ({name})")
+            return False
+
+    # New subscriber
+    subscribers.append({
+        'chat_id': chat_id_str,
+        'name': name,
+        'subscribed_at': datetime.now(TW_TZ).isoformat(),
+    })
+    safe_json_write(_SUBSCRIBERS_FILE, subscribers)
+    logger.info(f"新增訂閱者: {chat_id_str} ({name})")
+    return True
+
+
+def remove_subscriber(chat_id):
+    """
+    移除訂閱者。
+
+    Args:
+        chat_id: Telegram chat ID (str or int)
+
+    Returns:
+        bool: 是否成功移除（找不到回傳 False）
+    """
+    from utils.helpers import safe_json_read, safe_json_write
+    subscribers = safe_json_read(_SUBSCRIBERS_FILE, default=[])
+    if not isinstance(subscribers, list):
+        return False
+
+    chat_id_str = str(chat_id)
+    original_len = len(subscribers)
+    subscribers = [s for s in subscribers if str(s.get('chat_id', '')) != chat_id_str]
+
+    if len(subscribers) < original_len:
+        safe_json_write(_SUBSCRIBERS_FILE, subscribers)
+        logger.info(f"已移除訂閱者: {chat_id_str}")
+        return True
+
+    logger.warning(f"訂閱者不存在: {chat_id_str}")
+    return False
+
+
+def _send_to_chat(token, chat_id, message, parse_mode="Markdown"):
+    """
+    向指定 chat_id 發送訊息（內部函數）。
+
+    Returns:
+        bool: 是否成功
+    """
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": parse_mode,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            return True
+        else:
+            logger.error(f"Telegram 發送失敗 (chat={chat_id}): {resp.status_code} - {resp.text}")
+            # Retry without parse_mode (in case of markdown issues)
+            if parse_mode:
+                payload.pop("parse_mode")
+                resp2 = requests.post(url, json=payload, timeout=10)
+                if resp2.status_code == 200:
+                    return True
+            return False
+    except Exception as e:
+        logger.error(f"Telegram 發送錯誤 (chat={chat_id}): {e}")
+        return False
+
+
+def send_to_all_subscribers(message, parse_mode="Markdown"):
+    """
+    發送訊息給所有訂閱者，帶速率限制（每則間隔 50ms）。
+
+    Args:
+        message: 要發送的文字訊息
+        parse_mode: 解析模式 ("Markdown" or "HTML")
+
+    Returns:
+        dict: {sent: int, failed: int, total: int}
+    """
+    token = _get_bot_token()
+    if not token:
+        logger.warning("Telegram 未設定 (缺少 TELEGRAM_BOT_TOKEN)，無法群發")
+        print("[NOTIFY] Telegram 未設定，訊息僅顯示在本地:")
+        print(message)
+        return {'sent': 0, 'failed': 0, 'total': 0}
+
+    subscribers = get_subscribers()
+    if not subscribers:
+        logger.info("無訂閱者，跳過群發")
+        return {'sent': 0, 'failed': 0, 'total': 0}
+
+    sent = 0
+    failed = 0
+
+    for i, sub in enumerate(subscribers):
+        chat_id = sub.get('chat_id')
+        if not chat_id:
+            failed += 1
+            continue
+
+        success = _send_to_chat(token, chat_id, message, parse_mode)
+        if success:
+            sent += 1
+        else:
+            failed += 1
+
+        # Rate limiting: 50ms between messages to avoid Telegram API limits
+        # (Telegram allows ~30 msgs/sec, 50ms = 20 msgs/sec with margin)
+        if i < len(subscribers) - 1:
+            time.sleep(0.05)
+
+    logger.info(f"群發完成: {sent}/{len(subscribers)} 成功, {failed} 失敗")
+    return {'sent': sent, 'failed': failed, 'total': len(subscribers)}
+
+
 def send_telegram(message, parse_mode="Markdown"):
     """
-    發送 Telegram 訊息。
+    發送 Telegram 訊息（向預設 CHAT_ID）。
+    保持向後相容。
 
     Args:
         message: 要發送的文字訊息
@@ -59,30 +253,7 @@ def send_telegram(message, parse_mode="Markdown"):
         print(message)
         return False
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": parse_mode,
-    }
-
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            logger.info("Telegram 訊息發送成功")
-            return True
-        else:
-            logger.error(f"Telegram 發送失敗: {resp.status_code} - {resp.text}")
-            # Retry without parse_mode (in case of markdown issues)
-            if parse_mode:
-                payload.pop("parse_mode")
-                resp2 = requests.post(url, json=payload, timeout=10)
-                if resp2.status_code == 200:
-                    return True
-            return False
-    except Exception as e:
-        logger.error(f"Telegram 發送錯誤: {e}")
-        return False
+    return _send_to_chat(token, chat_id, message, parse_mode)
 
 
 def format_backtest_report(stats, trades, version="V3"):

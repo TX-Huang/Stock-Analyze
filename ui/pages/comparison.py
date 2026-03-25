@@ -34,9 +34,23 @@ _BUILTIN_STRATEGIES = {
 }
 
 
+def _extract_strategy_name(tree):
+    """
+    從 AST 中尋找頂層 STRATEGY_NAME = "..." 賦值，回傳字串或 None。
+    """
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "STRATEGY_NAME":
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        return node.value.value
+    return None
+
+
 def _discover_custom_strategies():
     """
-    掃描 strategies/custom/ 目錄，找出包含 run_strategy() 的 .py 檔案。
+    掃描 strategies/custom/ 目錄，找出包含 run_strategy() 或 run_*_strategy() 的 .py 檔案。
+    讀取檔案中的 STRATEGY_NAME 作為顯示名稱，若無則使用檔名。
     回傳 dict: display_name -> (module_path, function_name)
     """
     custom = {}
@@ -77,8 +91,19 @@ def _discover_custom_strategies():
                     continue
 
             module_name = fname.replace(".py", "")
-            display_name = f"📂 {module_name}"
             mod_path = f"strategies.custom.{module_name}"
+
+            # 優先使用檔案中定義的 STRATEGY_NAME，否則以檔名為顯示名
+            strat_name = _extract_strategy_name(tree)
+            if strat_name:
+                display_name = f"\U0001F4C2 {strat_name}"
+            else:
+                display_name = f"\U0001F4C2 {module_name}"
+
+            # 避免與內建策略名稱衝突
+            if display_name in _BUILTIN_STRATEGIES:
+                display_name = f"{display_name} (custom)"
+
             custom[display_name] = (mod_path, func_name)
         except Exception as e:
             logger.debug(f"Skipping {fname}: {e}")

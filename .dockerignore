@@ -1,0 +1,8 @@
+python_embed/
+installer/
+.claude/
+__pycache__/
+*.pyc
+.git/
+.streamlit/secrets.toml
+data/*.json

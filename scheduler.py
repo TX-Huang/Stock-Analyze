@@ -273,6 +273,86 @@ def run_daily_market_scan():
 
     logger.info(f"每日掃描完成 — {len(results)}/{len(tickers)} 檔成功，已寫入 {SCAN_RESULTS_PATH}")
 
+    # 掃描後推送每日摘要
+    try:
+        send_daily_digest()
+    except Exception as e:
+        logger.error(f"每日摘要推送失敗: {e}")
+
+
+def send_daily_digest():
+    """
+    讀取最新掃描結果，格式化 Top 5 機會摘要，群發給所有訂閱者。
+
+    讀取 data/scan_results.json，使用 format_report_summary() 格式化，
+    透過 send_to_all_subscribers() 推送。無訂閱者或無 bot token 時靜默退出。
+    """
+    from utils.helpers import safe_json_read
+    from utils.notify import send_to_all_subscribers, get_subscribers, _get_bot_token
+
+    # Pre-flight checks
+    if not _get_bot_token():
+        logger.info("每日摘要: 無 bot token，跳過推送")
+        return
+
+    if not get_subscribers():
+        logger.info("每日摘要: 無訂閱者，跳過推送")
+        return
+
+    scan_data = safe_json_read(SCAN_RESULTS_PATH, default=None)
+    if not scan_data:
+        logger.warning("每日摘要: 無掃描結果可推送")
+        return
+
+    results = scan_data.get('results', [])
+    if not results:
+        logger.info("每日摘要: 掃描結果為空，跳過推送")
+        return
+
+    scan_time = scan_data.get('scan_time', '---')
+
+    # Build digest using format_report_summary from stock_report
+    from analysis.stock_report import format_report_summary
+
+    # Each result from run_daily_market_scan has a 'scan' key holding the report dict
+    # Sort by composite score (descending) to pick top opportunities
+    scored = []
+    for r in results:
+        report = r.get('scan') or {}
+        thesis = report.get('thesis') or {}
+        score = thesis.get('composite_score')
+        scored.append((score if score is not None else -1, r))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top5 = scored[:5]
+
+    # Format message
+    lines = [f"📋 AI Invest HQ 每日戰情摘要", f"🕐 {scan_time}", ""]
+
+    for rank, (score, r) in enumerate(top5, 1):
+        report = r.get('scan') or {}
+        # Inject ticker/name into report for format_report_summary
+        report_with_meta = {**report}
+        if 'ticker' not in report_with_meta:
+            report_with_meta['ticker'] = r.get('ticker', '?')
+        if 'name' not in report_with_meta:
+            report_with_meta['name'] = r.get('name', '')
+
+        summary = format_report_summary(report_with_meta)
+        lines.append(f"{rank}. {summary}")
+
+    total = scan_data.get('total_scanned', len(results))
+    lines.append("")
+    lines.append(f"共掃描 {total} 檔，顯示前 {len(top5)} 名")
+
+    message = "\n".join(lines)
+
+    result = send_to_all_subscribers(message, parse_mode=None)
+    logger.info(
+        f"每日摘要推送完成: {result['sent']}/{result['total']} 成功, "
+        f"{result['failed']} 失敗"
+    )
+
 
 def run_apscheduler():
     """以 APScheduler BackgroundScheduler 獨立運行，每天 08:20 掃描市場。"""
