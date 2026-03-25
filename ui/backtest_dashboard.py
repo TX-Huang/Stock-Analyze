@@ -187,7 +187,7 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                                        mode='lines', name='回撤幅度',
                                        line=dict(color='#ef4444', width=1), fill='tozeroy'), row=2, col=1)
 
-            fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10))
+            fig.update_layout(height=600, margin=dict(l=10, r=10, t=50, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:

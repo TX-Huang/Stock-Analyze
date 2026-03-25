@@ -122,7 +122,7 @@ def render_monte_carlo_chart(mc_result, title="Monte Carlo 模擬"):
         xaxis_title='交易次數',
         yaxis_title='資金 (NTD)',
         yaxis=dict(tickformat=',.0f'),
-        margin=dict(t=40, l=60, r=20, b=40),
+        margin=dict(t=55, l=60, r=20, b=40),
         font=dict(family='Noto Sans TC, sans-serif'),
         legend=dict(orientation='h', yanchor='bottom', y=1.02),
     )

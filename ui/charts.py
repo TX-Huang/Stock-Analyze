@@ -212,7 +212,7 @@ def render_trend_chart(df, patterns, market, is_box=False, height=600, is_weekly
         )
 
         fig.update_layout(
-            height=height, margin=dict(l=10, r=10, t=40, b=10),
+            height=height, margin=dict(l=10, r=10, t=50, b=10),
             xaxis_rangeslider_visible=False, showlegend=True,
             template='plotly_dark',
             paper_bgcolor='rgba(0,0,0,0)',

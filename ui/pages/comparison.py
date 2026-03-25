@@ -513,6 +513,7 @@ def _render_trade_distributions(name_a, name_b, trades_a, trades_b):
     fig.update_yaxes(title_text="次數", row=1, col=2)
     fig.update_layout(
         barmode="overlay",
+        margin=dict(t=60),
         legend=dict(orientation="h", yanchor="bottom", y=1.08,
                     xanchor="center", x=0.5),
     )
