@@ -14,21 +14,32 @@ from ui.theme import _tw_color, _tw_color_pct, _plotly_dark_layout
 logger = logging.getLogger(__name__)
 
 
-def render_stock_profile(ticker, show_actions=True):
+def render_stock_profile(ticker, show_actions=True, market_type=None):
     """
     渲染個股全貌面板。
 
     Args:
         ticker: 股票代碼 (e.g. "2330")
         show_actions: 是否顯示操作按鈕列
+        market_type: 'TW' or 'US'. If None, auto-detect from ticker format.
     """
     if not ticker:
         return
 
     ticker = str(ticker).strip()
 
+    # Auto-detect market_type if not provided
+    if market_type is None:
+        import re as _re
+        if _re.match(r'^\d{4,6}[A-Za-z]?$', ticker):
+            market_type = 'TW'
+        elif _re.match(r'^[A-Za-z]{1,5}$', ticker):
+            market_type = 'US'
+        else:
+            market_type = 'TW'
+
     # ── Fetch Data ──
-    df, info, name = _fetch_stock_data(ticker)
+    df, info, name = _fetch_stock_data(ticker, market_type=market_type)
     if df is None or df.empty:
         st.warning(f"無法取得 {ticker} 的資料")
         return
@@ -376,11 +387,11 @@ def _info_card(title, items, accent="#00f0ff"):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_stock_data(ticker):
+def _fetch_stock_data(ticker, market_type="TW"):
     """Fetch historical data + basic info for a ticker."""
     try:
         from data.provider import get_data_provider
-        provider = get_data_provider("yfinance", market_type="TW")
+        provider = get_data_provider("auto", market_type=market_type)
         df = provider.get_historical_data(ticker, period="6mo", interval="1d")
         if df is None or df.empty:
             return None, {}, ticker

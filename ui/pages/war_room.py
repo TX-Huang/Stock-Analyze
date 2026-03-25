@@ -11,12 +11,29 @@ import streamlit as st
 import logging
 import os
 import re
+import pandas as pd
 from datetime import datetime, timedelta, timezone
 
 from ui.theme import inject_cyber_theme
 from ui.components import custom_metric, cyber_spinner
 from utils.helpers import safe_json_read
 from config.paths import PAPER_TRADE_PATH, SCAN_RESULTS_PATH
+
+
+def _detect_market_type(ticker_input: str) -> str:
+    """Auto-detect market type from ticker input.
+
+    Returns 'TW', 'US', or 'unknown'.
+    - Pure digits (e.g. '2330') -> TW
+    - Pure letters (e.g. 'AAPL', 'TSLA') -> US
+    - Mixed / Chinese characters -> 'unknown' (needs AI resolution)
+    """
+    text = str(ticker_input).strip()
+    if re.match(r'^\d{4,6}[A-Za-z]?$', text):
+        return 'TW'
+    if re.match(r'^[A-Za-z]{1,5}$', text):
+        return 'US'
+    return 'unknown'
 
 logger = logging.getLogger(__name__)
 TW_TZ = timezone(timedelta(hours=8))
@@ -151,8 +168,25 @@ def _scan_freshness_indicator(scan_time):
 
 
 def _render_market_kpi():
-    """Layer 1: Market overview KPI strip."""
-    st.markdown('<div class="sec-header">今日市場概覽</div>', unsafe_allow_html=True)
+    """Layer 1: Market overview KPI strip.
+
+    Auto-detects market context: if the user's last search was a US stock,
+    show S&P 500 / NASDAQ data instead of TAIEX.
+    """
+    current_market = st.session_state.get('_war_room_market', 'TW')
+
+    if current_market == 'US':
+        _render_us_market_kpi()
+    else:
+        _render_tw_market_kpi()
+
+
+def _render_tw_market_kpi():
+    """Render Taiwan market KPI strip (TAIEX)."""
+    st.markdown(
+        '<div class="sec-header">\U0001f1f9\U0001f1fc 今日市場概覽</div>',
+        unsafe_allow_html=True,
+    )
 
     from config.paths import RECOMMENDATION_PATH
     rec = safe_json_read(RECOMMENDATION_PATH, {})
@@ -193,6 +227,73 @@ def _render_market_kpi():
         st.metric("漲跌比", str(adv_dec))
     with c4:
         st.metric("大盤情緒", sent_str)
+
+
+def _render_us_market_kpi():
+    """Render US market KPI strip (S&P 500 / NASDAQ) via YFinance."""
+    st.markdown(
+        '<div class="sec-header">\U0001f1fa\U0001f1f8 US Market Overview</div>',
+        unsafe_allow_html=True,
+    )
+
+    sp500 = '--'
+    sp500_delta = None
+    nasdaq = '--'
+    nasdaq_delta = None
+
+    try:
+        import yfinance as yf
+
+        # S&P 500
+        spy = yf.download('^GSPC', period='5d', interval='1d', progress=False)
+        if spy is not None and not spy.empty:
+            if isinstance(spy.columns, pd.MultiIndex):
+                spy.columns = spy.columns.get_level_values(0)
+            close_vals = spy['Close'].dropna()
+            if len(close_vals) >= 2:
+                sp_price = float(close_vals.iloc[-1])
+                sp_prev = float(close_vals.iloc[-2])
+                sp_chg_pct = (sp_price - sp_prev) / sp_prev * 100 if sp_prev else 0
+                sp500 = f"{sp_price:,.0f}"
+                sp500_delta = f"{sp_chg_pct:+.2f}%"
+
+        # NASDAQ Composite
+        ndx = yf.download('^IXIC', period='5d', interval='1d', progress=False)
+        if ndx is not None and not ndx.empty:
+            if isinstance(ndx.columns, pd.MultiIndex):
+                ndx.columns = ndx.columns.get_level_values(0)
+            close_vals = ndx['Close'].dropna()
+            if len(close_vals) >= 2:
+                nd_price = float(close_vals.iloc[-1])
+                nd_prev = float(close_vals.iloc[-2])
+                nd_chg_pct = (nd_price - nd_prev) / nd_prev * 100 if nd_prev else 0
+                nasdaq = f"{nd_price:,.0f}"
+                nasdaq_delta = f"{nd_chg_pct:+.2f}%"
+    except Exception as e:
+        logger.warning("[WarRoom] Failed to fetch US market data: %s", e)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("S&P 500", sp500, delta=sp500_delta)
+    with c2:
+        st.metric("NASDAQ", nasdaq, delta=nasdaq_delta)
+    with c3:
+        # VIX (fear index)
+        vix_str = '--'
+        try:
+            import yfinance as yf
+            vix = yf.download('^VIX', period='5d', interval='1d', progress=False)
+            if vix is not None and not vix.empty:
+                if isinstance(vix.columns, pd.MultiIndex):
+                    vix.columns = vix.columns.get_level_values(0)
+                vix_val = float(vix['Close'].dropna().iloc[-1])
+                vix_str = f"{vix_val:.1f}"
+        except Exception:
+            pass
+        st.metric("VIX 恐慌指數", vix_str)
+    with c4:
+        # Market context indicator
+        st.metric("市場模式", "US")
 
 
 def _render_opportunity_cards(results, scan_time):
@@ -368,7 +469,36 @@ def _render_quick_diagnosis():
     if target_ticker:
         target_ticker = str(target_ticker).strip()
         if target_ticker:
+            # --- Smart market detection ---
+            detected = _detect_market_type(target_ticker)
+            if detected == 'TW':
+                market_type = 'TW'
+            elif detected == 'US':
+                market_type = 'US'
+                target_ticker = target_ticker.upper()
+            else:
+                # Mixed / Chinese — try AI resolution
+                try:
+                    from analysis.ai_core import resolve_ticker_and_market
+                    from config.settings import GEMINI_MODEL
+                    client = st.session_state.get('gemini_client')
+                    resolved_ticker, resolved_market, _ = resolve_ticker_and_market(
+                        target_ticker, client=client,
+                        gemini_model=GEMINI_MODEL if client else None,
+                    )
+                    if resolved_ticker and resolved_market:
+                        target_ticker = resolved_ticker
+                        market_type = 'US' if '美股' in resolved_market else 'TW'
+                    else:
+                        market_type = 'TW'  # default fallback
+                except Exception:
+                    market_type = 'TW'
+
+            # Store current market context for KPI strip
+            st.session_state['_war_room_market'] = market_type
+
             # Pulsing neon loading animation
+            market_flag = '\U0001f1fa\U0001f1f8' if market_type == 'US' else '\U0001f1f9\U0001f1fc'
             st.markdown(
                 f'<style>'
                 f'@keyframes war-pulse {{ 0%,100% {{ opacity:0.4 }} 50% {{ opacity:1 }} }}'
@@ -377,27 +507,37 @@ def _render_quick_diagnosis():
                 f'text-align:center;padding:12px;'
                 f'text-shadow:0 0 8px rgba(0,240,255,0.5) }}'
                 f'</style>'
-                f'<div class="war-loading">AI 正在分析 {target_ticker}...</div>',
+                f'<div class="war-loading">{market_flag} AI 正在分析 {target_ticker}...</div>',
                 unsafe_allow_html=True,
             )
-            _render_inline_report(target_ticker)
+            _render_inline_report(target_ticker, market_type=market_type)
 
 
-def _render_inline_report(ticker):
+def _render_inline_report(ticker, market_type="TW"):
     """Render an inline stock report for the given ticker."""
+    market_flag = '\U0001f1fa\U0001f1f8' if market_type == 'US' else '\U0001f1f9\U0001f1fc'
     st.markdown(
         f'<div style="margin:8px 0 4px;padding:6px 12px;background:rgba(0,240,255,0.04);'
         f'border:1px solid rgba(0,240,255,0.12);border-radius:6px">'
         f'<span style="font-size:0.72rem;color:var(--neon-cyan);font-family:JetBrains Mono,monospace">'
-        f'DIAGNOSING: {ticker}</span></div>',
+        f'{market_flag} DIAGNOSING: {ticker}</span></div>',
         unsafe_allow_html=True,
     )
 
     try:
-        from analysis.stock_report import render_stock_report
-        render_stock_report(ticker)
+        from analysis.stock_report import generate_stock_report, format_report_summary
+        report = generate_stock_report(ticker, market_type=market_type)
+        summary = format_report_summary(report)
+        st.info(summary)
+        # Render full profile with market-aware provider
+        from ui.stock_profile import render_stock_profile
+        render_stock_profile(ticker, show_actions=True, market_type=market_type)
     except ImportError:
         try:
+            from ui.stock_profile import render_stock_profile
+            render_stock_profile(ticker, show_actions=True, market_type=market_type)
+        except TypeError:
+            # Fallback if render_stock_profile doesn't accept market_type yet
             from ui.stock_profile import render_stock_profile
             render_stock_profile(ticker, show_actions=True)
         except Exception as e:

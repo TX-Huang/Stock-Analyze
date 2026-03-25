@@ -141,13 +141,24 @@ def generate_stock_report(
 
     # ── Section: fundamental ──
     try:
-        report['fundamental'] = {
-            'pe': stock_info.get('pe', 'N/A'),
-            'eps': stock_info.get('eps', 'N/A'),
-            'dividend_yield': stock_info.get('yield', 'N/A'),
-            'revenue_mom': 'N/A',
-            'revenue_yoy': 'N/A',
-        }
+        if market_type == "US":
+            # US stocks: YFinance uses trailingPE, trailingEps, dividendYield
+            report['fundamental'] = {
+                'pe': stock_info.get('pe', stock_info.get('trailingPE', 'N/A')),
+                'eps': stock_info.get('eps', stock_info.get('trailingEps', 'N/A')),
+                'dividend_yield': stock_info.get('yield', stock_info.get('dividendYield', 'N/A')),
+                'market_cap': stock_info.get('marketCap', 'N/A'),
+                'revenue_mom': 'N/A',
+                'revenue_yoy': 'N/A',
+            }
+        else:
+            report['fundamental'] = {
+                'pe': stock_info.get('pe', 'N/A'),
+                'eps': stock_info.get('eps', 'N/A'),
+                'dividend_yield': stock_info.get('yield', 'N/A'),
+                'revenue_mom': 'N/A',
+                'revenue_yoy': 'N/A',
+            }
     except Exception as e:
         logger.warning("[StockReport] fundamental section failed for %s: %s", ticker, e)
 
@@ -521,10 +532,33 @@ def format_report_summary(report: dict) -> str:
     Format a one-line text summary from a stock report.
 
     Example output:
-        "2330 台積電 | 多頭 | RSI 65 | MACD 翻紅 | 綜合分 7.2 | 近壓力位"
+        "\U0001f1f9\U0001f1fc 2330 台積電 | 多頭 | RSI 65 | MACD 翻紅 | 綜合分 7.2 | 近壓力位"
+        "\U0001f1fa\U0001f1f8 AAPL Apple | Bullish | RSI 65 | MACD 翻紅 | 綜合分 7.2"
+
+    Color convention note:
+        TW: 紅漲綠跌 (red=up, green=down)
+        US: 綠漲紅跌 (green=up, red=down)
     """
     ticker = report.get('ticker', '?')
     name = report.get('name', '')
+    market = report.get('market', 'TW')
+
+    # Market flag
+    flag = '\U0001f1fa\U0001f1f8' if market == 'US' else '\U0001f1f9\U0001f1fc'
+
+    # Price change with market-aware color indicator
+    price_info = report.get('price_info') or {}
+    change_pct = price_info.get('change_pct')
+    if change_pct is not None:
+        if market == 'US':
+            # US: green up, red down
+            arrow = '\u25b2' if change_pct > 0 else '\u25bc' if change_pct < 0 else '\u2500'
+        else:
+            # TW: red up, green down (arrow direction same, color handled by UI)
+            arrow = '\u25b2' if change_pct > 0 else '\u25bc' if change_pct < 0 else '\u2500'
+        chg_str = f"{arrow}{change_pct:+.1f}%"
+    else:
+        chg_str = ''
 
     # Trend
     tech = report.get('technical') or {}
@@ -554,4 +588,24 @@ def format_report_summary(report: dict) -> str:
         title = first_warn.get('title', '')
         warn_str = f" | {title}"
 
-    return f"{ticker} {name} | {trend} | {rsi_str} | {macd_str} | {score_str}{warn_str}"
+    parts = [f"{flag} {ticker} {name}"]
+    if chg_str:
+        parts.append(chg_str)
+    parts.extend([trend, rsi_str, macd_str, score_str])
+    result = " | ".join(parts)
+    if warn_str:
+        result += warn_str
+    return result
+
+
+def get_change_color(change_pct: float, market_type: str = "TW") -> str:
+    """Return the appropriate color for a price change value.
+
+    TW convention: 紅漲綠跌 (red=up, green=down)
+    US convention: 綠漲紅跌 (green=up, red=down)
+    """
+    if change_pct > 0:
+        return "#ef4444" if market_type == "TW" else "#22c55e"
+    elif change_pct < 0:
+        return "#22c55e" if market_type == "TW" else "#ef4444"
+    return "#94a3b8"
