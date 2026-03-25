@@ -1166,6 +1166,15 @@ def _run_simulation(final_pos, signals, technicals, data_dict, params,
     for cond_name, cond_count in conditions_debug.items():
         logging.info(f"  {cond_name}: {cond_count}")
 
+    # === 功能2: Signal A 進場條件漏斗分析 ===
+    funnel = _compute_signal_funnel(signals, technicals, data_dict)
+    logging.info("--- Signal A 進場條件漏斗 (逐步篩選) ---")
+    print("===== Signal A Entry Funnel =====")
+    for name, single, cumulative in funnel:
+        line = f"  {name:<35s} | 單獨: {single:>12,} | 累積AND: {cumulative:>10,}"
+        logging.info(line)
+        print(line)
+
     try:
         from data.provider import safe_finlab_sim
 
@@ -1207,44 +1216,63 @@ def _run_simulation(final_pos, signals, technicals, data_dict, params,
                 logging.info(f"  max_drawdown = {stats.get('max_drawdown', 'MISSING')}")
                 logging.info(f"  win_ratio = {stats.get('win_ratio', 'MISSING')}")
 
-            # === Yearly Trade Statistics ===
-            if len(trades) > 0 and 'entry_date' in trades.columns:
-                trades_copy = trades.copy()
-                trades_copy['year'] = pd.to_datetime(trades_copy['entry_date']).dt.year
-                years = sorted(trades_copy['year'].unique())
-
-                first_year = years[0] if years else 0
-                last_year = years[-1] if years else 0
-                header = f"===== Yearly Trade Statistics ({first_year}~{last_year}) ====="
+            # === 功能1: 逐年完整績效表 (Equity + Trade 雙維度) ===
+            equity = getattr(report, 'creturn', None)
+            if equity is not None and len(equity) > 0:
+                header = "===== Yearly Equity Performance ====="
                 logging.info(header)
                 print(header)
+                fmt_h = (f"{'Year':>6} | {'AnnRet':>9} | {'MaxDD':>9} | {'Sharpe':>8} | "
+                         f"{'Trades':>6} | {'AvgRet':>9} | {'WinRate':>9} | {'MAE':>9} | {'MFE':>9}")
+                logging.info(fmt_h)
+                print(fmt_h)
+                logging.info("-" * len(fmt_h))
+                print("-" * len(fmt_h))
 
-                fmt_header = (f"{'Year':>6} | {'Trades':>6}   | {'AvgRet':>10} | {'MedRet':>10} | "
-                              f"{'WinRate':>10} | {'MAE':>10} | {'MFE':>10}")
-                logging.info(fmt_header)
-                print(fmt_header)
+                eq_years = equity.groupby(equity.index.year)
+                trades_copy = trades.copy()
+                if len(trades) > 0 and 'entry_date' in trades.columns:
+                    trades_copy['year'] = pd.to_datetime(trades_copy['entry_date']).dt.year
+                else:
+                    trades_copy['year'] = []
 
-                for yr in years:
-                    yr_trades = trades_copy[trades_copy['year'] == yr]
-                    n = len(yr_trades)
-                    if n == 0:
-                        continue
+                all_years = sorted(set(eq_years.groups.keys()))
+                for yr in all_years:
+                    # Equity-based metrics
+                    eq_yr = eq_years.get_group(yr)
+                    yr_start = eq_yr.iloc[0]
+                    yr_end = eq_yr.iloc[-1]
+                    ann_ret = (yr_end / yr_start - 1) * 100
+                    # Yearly MDD from equity curve
+                    running_max = eq_yr.cummax()
+                    dd = (eq_yr - running_max) / running_max
+                    yr_mdd = dd.min() * 100
+                    # Yearly Sharpe (daily returns annualized)
+                    daily_ret = eq_yr.pct_change().dropna()
+                    if len(daily_ret) > 1 and daily_ret.std() > 0:
+                        yr_sharpe = (daily_ret.mean() / daily_ret.std()) * (252 ** 0.5)
+                    else:
+                        yr_sharpe = float('nan')
 
+                    # Trade-based metrics for this year
+                    yr_trades = trades_copy[trades_copy['year'] == yr] if len(trades_copy) > 0 else pd.DataFrame()
+                    n_trades = len(yr_trades)
                     ret_col = 'return' if 'return' in yr_trades.columns else None
                     mae_col = 'mae' if 'mae' in yr_trades.columns else None
-                    # MFE: 使用 gmfe (gross MFE)
                     mfe_col = 'gmfe' if 'gmfe' in yr_trades.columns else ('bmfe' if 'bmfe' in yr_trades.columns else None)
 
-                    avg_ret = yr_trades[ret_col].mean() * 100 if ret_col else float('nan')
-                    med_ret = yr_trades[ret_col].median() * 100 if ret_col else float('nan')
-                    win_rate = (yr_trades[ret_col] > 0).mean() * 100 if ret_col else float('nan')
-                    mae_val = yr_trades[mae_col].mean() * 100 if mae_col else float('nan')
-                    mfe_val = yr_trades[mfe_col].mean() * 100 if mfe_col else float('nan')
+                    avg_ret = yr_trades[ret_col].mean() * 100 if (ret_col and n_trades > 0) else float('nan')
+                    win_rate = (yr_trades[ret_col] > 0).mean() * 100 if (ret_col and n_trades > 0) else float('nan')
+                    mae_val = yr_trades[mae_col].mean() * 100 if (mae_col and n_trades > 0) else float('nan')
+                    mfe_val = yr_trades[mfe_col].mean() * 100 if (mfe_col and n_trades > 0) else float('nan')
 
-                    line = (f"{yr:>6} | Trades: {n:>4} | AvgRet: {avg_ret:>7.2f}% | MedRet: {med_ret:>7.2f}% | "
-                            f"WinRate: {win_rate:>6.2f}% | MAE: {mae_val:>7.2f}% | MFE: {mfe_val:>7.2f}%")
+                    line = (f"{yr:>6} | {ann_ret:>8.2f}% | {yr_mdd:>8.2f}% | {yr_sharpe:>8.2f} | "
+                            f"{n_trades:>6} | {avg_ret:>8.2f}% | {win_rate:>8.1f}% | {mae_val:>8.2f}% | {mfe_val:>8.2f}%")
                     logging.info(line)
                     print(line)
+
+            # === 功能4: 持倉異動日誌 (Position Change Log) ===
+            _log_position_changes(sim_pos, logging)
 
         except Exception as diag_e:
             logging.warning(f"診斷失敗: {diag_e}")
@@ -1255,6 +1283,196 @@ def _run_simulation(final_pos, signals, technicals, data_dict, params,
     except Exception as e:
         logging.error(f"策略層級崩潰: {str(e)}", exc_info=True)
         raise e
+
+
+def _log_position_changes(final_pos, logger):
+    """
+    功能4: 持倉異動日誌
+    逐日比較持倉變化，記錄進場/出場/替換事件到 log。
+    只記錄有異動的日期，避免 log 過大。
+    """
+    prev_holdings = set()
+    for i in range(len(final_pos)):
+        date = final_pos.index[i]
+        row = final_pos.iloc[i]
+        curr_holdings = set(row[row > 0].index)
+
+        entered = curr_holdings - prev_holdings
+        exited = prev_holdings - curr_holdings
+        stayed = curr_holdings & prev_holdings
+
+        if entered or exited:
+            date_str = date.strftime('%Y-%m-%d')
+            parts = [f"[持倉異動] {date_str} |"]
+            if entered and exited:
+                # 替換: 有進有出
+                entered_str = ','.join(sorted(entered))
+                exited_str = ','.join(sorted(exited))
+                parts.append(f"替換: OUT({exited_str}) → IN({entered_str})")
+            elif entered:
+                parts.append(f"新進場: {','.join(sorted(entered))}")
+            elif exited:
+                parts.append(f"出場: {','.join(sorted(exited))}")
+            parts.append(f"| 持倉({len(curr_holdings)}檔): {','.join(sorted(curr_holdings))}")
+            logger.info(' '.join(parts))
+
+        prev_holdings = curr_holdings
+
+
+def _compute_signal_funnel(signals, technicals, data_dict):
+    """
+    功能2: 進場條件漏斗分析
+    逐步疊加 Signal A 的每個條件，記錄每層剩餘的股票數量。
+    返回 list of (條件名, 該條件為True的日股數, 逐步AND後剩餘日股數)
+    """
+    v_etf_ok = technicals['v_etf_ok']
+    n_total = technicals['v_close'].shape[1]  # 總股票數
+
+    # Signal A 的條件鏈 (順序與 _generate_signals 一致)
+    conditions = [
+        ('全部股票', np.ones_like(technicals['v_close'], dtype=bool)),
+        ('非ETF (v_etf_ok)', np.broadcast_to(v_etf_ok, technicals['v_close'].shape)),
+        ('流動性 > 50萬 (v_liq)', signals['v_liq']),
+        ('大盤多頭 (v_bullish)', signals['v_bullish']),
+        ('趨勢排列 Close>MA20>MA60', signals['c_trend']),
+        ('HV正常區間', signals['c_hv_ok']),
+        ('非套牢區 (c_safe_supply)', signals['c_safe_supply']),
+        ('20日新高突破+帶量 (c_breakout)', signals['c_breakout']),
+    ]
+
+    funnel = []
+    cumulative = np.ones_like(technicals['v_close'], dtype=bool)
+    for name, cond in conditions:
+        cond_bool = np.asarray(cond, dtype=bool)
+        # 確保 shape 可以 broadcast
+        if cond_bool.shape != cumulative.shape:
+            cond_bool = np.broadcast_to(cond_bool, cumulative.shape)
+        single_count = cond_bool.sum()
+        cumulative = cumulative & cond_bool
+        cum_count = cumulative.sum()
+        funnel.append((name, int(single_count), int(cum_count)))
+
+    return funnel
+
+
+def get_current_holdings(api_token, params=None):
+    """
+    功能3: 現倉追蹤
+    返回策略目前持有的股票清單，包含股票名稱、進場時間、目前獲利率。
+    """
+    result = run_isaac_strategy(api_token, raw_mode=True, params=params)
+    final_pos = result['final_pos']
+    close = result['close']
+
+    # 最後一天的持倉
+    last_date = final_pos.index[-1]
+    last_row = final_pos.iloc[-1]
+    holdings = last_row[last_row > 0].sort_values(ascending=False)
+
+    if len(holdings) == 0:
+        return pd.DataFrame(columns=['股票代碼', '股票名稱', '進場日期', '進場價', '現價', '獲利率%', 'Score'])
+
+    # 取得股票名稱
+    try:
+        from finlab import data as fdata
+        company_info = fdata.get('company_basic_info')
+        name_map = company_info['公司簡稱'] if '公司簡稱' in company_info.columns else pd.Series()
+    except Exception:
+        name_map = pd.Series()
+
+    rows = []
+    for stock_id in holdings.index:
+        score = holdings[stock_id]
+        # 找進場日: 從最後一天往前找，第一個 pos==0 的日期之後就是進場日
+        pos_series = final_pos[stock_id]
+        # 從尾端往前找到第一個 0 或 NaN 的位置
+        nonzero_mask = pos_series > 0
+        entry_idx = None
+        for j in range(len(pos_series) - 1, -1, -1):
+            if not nonzero_mask.iloc[j]:
+                entry_idx = j + 1
+                break
+        if entry_idx is None or entry_idx >= len(pos_series):
+            entry_idx = 0  # 從頭就持有
+
+        entry_date = pos_series.index[entry_idx]
+        # 進場價 = 進場日的收盤價
+        close_aligned = close.reindex(final_pos.index).ffill()
+        entry_price = close_aligned.loc[entry_date, stock_id] if stock_id in close_aligned.columns else float('nan')
+        current_price = close_aligned.iloc[-1][stock_id] if stock_id in close_aligned.columns else float('nan')
+        pnl_pct = (current_price / entry_price - 1) * 100 if entry_price > 0 else float('nan')
+
+        stock_name = name_map.get(stock_id, name_map.get(str(stock_id), ''))
+
+        rows.append({
+            '股票代碼': stock_id,
+            '股票名稱': stock_name,
+            '進場日期': entry_date.strftime('%Y-%m-%d'),
+            '進場價': round(entry_price, 2),
+            '現價': round(current_price, 2),
+            '獲利率%': round(pnl_pct, 2),
+            'Score': round(score, 1),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def get_signal_funnel(api_token, params=None):
+    """
+    功能2: 取得進場條件漏斗分析結果
+    """
+    data_dict = _fetch_data(api_token)
+    technicals = _compute_technicals(data_dict)
+    p = params or {}
+    signals = _generate_signals(technicals, data_dict, p, 'signal_e')
+    funnel = _compute_signal_funnel(signals, technicals, data_dict)
+    return funnel
+
+
+def get_replacement_preview(api_token, params=None):
+    """
+    功能4 (daily report 部分): 今日 vs 昨日持倉比較，預告替換
+    """
+    result = run_isaac_strategy(api_token, raw_mode=True, params=params)
+    final_pos = result['final_pos']
+    close = result['close']
+
+    if len(final_pos) < 2:
+        return {'today': set(), 'yesterday': set(), 'entered': set(), 'exited': set()}
+
+    today_row = final_pos.iloc[-1]
+    yesterday_row = final_pos.iloc[-2]
+
+    today_holdings = set(today_row[today_row > 0].index)
+    yesterday_holdings = set(yesterday_row[yesterday_row > 0].index)
+
+    entered = today_holdings - yesterday_holdings
+    exited = yesterday_holdings - today_holdings
+
+    # 取得股票名稱
+    try:
+        from finlab import data as fdata
+        company_info = fdata.get('company_basic_info')
+        name_map = company_info['公司簡稱'] if '公司簡稱' in company_info.columns else {}
+    except Exception:
+        name_map = {}
+
+    def _enrich(stock_set, pos_row):
+        result = []
+        close_last = close.reindex(final_pos.index).ffill().iloc[-1]
+        for sid in sorted(stock_set):
+            name = name_map.get(sid, name_map.get(str(sid), ''))
+            score = pos_row.get(sid, 0)
+            price = close_last.get(sid, float('nan'))
+            result.append({'代碼': sid, '名稱': name, 'Score': round(float(score), 1), '現價': round(float(price), 2)})
+        return result
+
+    return {
+        'date': final_pos.index[-1].strftime('%Y-%m-%d'),
+        'holdings': _enrich(today_holdings, today_row),
+        'entered': _enrich(entered, today_row),
+        'exited': _enrich(exited, yesterday_row),
+    }
 
 
 def run_isaac_strategy(api_token, stop_loss=None, take_profit=None, minervini_mode='signal_e',
