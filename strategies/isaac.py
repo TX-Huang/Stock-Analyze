@@ -1221,7 +1221,7 @@ def _run_simulation(final_pos, signals, technicals, data_dict, params,
             # [V3.3 修正] 移除 resample='D'：
             # resample='D' 導致 FinLab 將每天視為獨立交易 → 所有持有天數都顯示 1
             # 不設 resample 時，FinLab 根據 position 值的實際變化來判斷交易進出場
-            'name': f'Isaac V3.7{minervini_mode or ""}',
+            'name': f'Isaac V3.9{minervini_mode or ""}',
             'upload': False,
             'trail_stop': _trail_stop,
             'position_limit': 1.0 / max_concurrent_total,  # 每檔上限 = 1/N (10檔→10%)
