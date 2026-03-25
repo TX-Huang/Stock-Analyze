@@ -1,8 +1,14 @@
 credentials:
   usernames:
     admin:
-      name: 管理員
-      password: $2b$12$67x.wXgUDL7cHf0E4nQI6eaPkBJprfQ5y.gU4qha7tfNnHkPYqMZe
+      name: IsaacHuang
+      password: $2b$12$hpkQdHZBjaH9cdEewmyN9O5GbfpXQTJhq7SQwCkZFCAKefSGY6Q6.
+    Po:
+      name: Po
+      password: $2b$12$FR31pGEJwPiIZte1HP3gcebhBjk0CZnrPACYvSwC3IRLMkZ1AguNe
+    Will:
+      name: Will
+      password: $2b$12$MkJrb8WUO1DDL8UvbuOG3.5kylZZjKiMX8fqadkAE4AAQxH1eaKR.
 
 cookie:
   name: ai_invest_hq

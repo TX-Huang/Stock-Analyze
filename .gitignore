@@ -31,6 +31,9 @@ logs/
 # Claude Code
 .claude/
 
+# gstack local state
+.gstack/
+
 # Installer
 installer/
 =20.0
