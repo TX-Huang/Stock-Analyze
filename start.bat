@@ -69,6 +69,10 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr :8501 ^| findstr LISTENING') 
     taskkill /PID %%p /F >nul 2>&1
 )
 
+:: Start scheduler as background process
+echo  [*] Starting scheduler (background)...
+start /B "" "%PY%" "%ROOT%\scheduler.py" --apscheduler
+
 echo.
 echo  [*] Starting at http://localhost:8501
 echo  [*] Close this window to stop the server

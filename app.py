@@ -15,6 +15,59 @@ from ui.theme import inject_cyber_theme
 st.set_page_config(page_title="全域量化終端 v200", layout="wide", page_icon="💎")
 pd.set_option("styler.render.max_elements", 1_000_000)
 
+# --- Authentication (graceful degradation) ---
+_auth_available = False
+try:
+    import streamlit_authenticator as stauth
+    import yaml
+    from yaml.loader import SafeLoader
+
+    _auth_config_path = os.path.join(os.path.dirname(__file__), 'config', 'auth_config.yaml')
+    if os.path.exists(_auth_config_path):
+        with open(_auth_config_path, 'r', encoding='utf-8') as _f:
+            _auth_config = yaml.load(_f, Loader=SafeLoader)
+
+        _authenticator = stauth.Authenticate(
+            _auth_config['credentials'],
+            _auth_config['cookie']['name'],
+            _auth_config['cookie']['key'],
+            _auth_config['cookie']['expiry_days'],
+        )
+        _auth_available = True
+except Exception:
+    _auth_available = False
+
+if _auth_available:
+    with st.sidebar:
+        name, authentication_status, username = _authenticator.login(
+            location='sidebar',
+            fields={
+                'Form name': '登入',
+                'Username': '使用者名稱',
+                'Password': '密碼',
+                'Login': '登入',
+            },
+        )
+
+    if authentication_status is False:
+        st.sidebar.error('使用者名稱或密碼錯誤')
+        st.stop()
+    elif authentication_status is None:
+        st.markdown(
+            '<div style="text-align:center;margin-top:100px;color:#94a3b8;font-size:1.1rem">'
+            '請在左側欄登入以使用全域量化終端</div>',
+            unsafe_allow_html=True,
+        )
+        st.stop()
+    else:
+        with st.sidebar:
+            st.markdown(
+                f'<div style="font-size:0.75rem;color:#22c55e;margin-bottom:4px">'
+                f'👤 {name}</div>',
+                unsafe_allow_html=True,
+            )
+            _authenticator.logout('登出', 'sidebar')
+
 # --- Theme + State ---
 inject_cyber_theme()
 init_session_state()
@@ -38,6 +91,7 @@ with st.sidebar:
     app_mode = st.radio(
         "nav",
         [
+            "🎯 AI 戰情室",
             "📊 交易總覽",
             "🔍 研究分析",
             "⚡ 交易執行",
@@ -91,8 +145,8 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # Research sidebar controls
-    if app_mode == "🔍 研究分析":
+    # Research / War Room sidebar controls
+    if app_mode in ("🔍 研究分析", "🎯 AI 戰情室"):
         st.divider()
         market_mode = st.radio("市場", ["🇹🇼 台股 (TW)", "🗽 美股 (US)"],
                                index=0 if "台股" in st.session_state.market_mode else 1,
@@ -149,7 +203,12 @@ if not _has_any_key and app_mode == "📊 交易總覽":
 # Module Router (5 pages)
 # ==========================================
 
-if app_mode == "📊 交易總覽":
+if app_mode == "🎯 AI 戰情室":
+    from ui.pages.war_room import render as render_war_room
+    render_war_room(client=client, market_mode=market_mode, strategy_mode=strategy_mode,
+                    tf_code=tf_code, is_weekly=is_weekly)
+
+elif app_mode == "📊 交易總覽":
     from ui.pages.dashboard import render
     render()
 

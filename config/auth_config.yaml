@@ -1,0 +1,10 @@
+credentials:
+  usernames:
+    admin:
+      name: 管理員
+      password: $2b$12$67x.wXgUDL7cHf0E4nQI6eaPkBJprfQ5y.gU4qha7tfNnHkPYqMZe
+
+cookie:
+  name: ai_invest_hq
+  key: ai_invest_hq_secret_key_2026
+  expiry_days: 30

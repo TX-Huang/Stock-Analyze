@@ -216,5 +216,109 @@ def main():
         logger.info("排程器已停止 (Ctrl+C)")
 
 
+def run_daily_market_scan():
+    """APScheduler 用的每日市場掃描 job — 使用 data/scanner.py 掃描邏輯。"""
+    from data.scanner import scan_single_stock_deep
+    from data.watchlist import WatchlistManager
+
+    logger.info("=== 每日市場掃描 (APScheduler) ===")
+
+    # 收集自選股 + 持倉
+    watchlist = _get_watchlist_tickers()
+    portfolio = _get_portfolio_tickers()
+    tickers = _merge_tickers(watchlist, portfolio)
+
+    if not tickers:
+        logger.warning("無標的可掃描 — 自選股和持倉皆為空")
+        return
+
+    logger.info(f"掃描標的: {len(tickers)} 檔")
+
+    results = []
+    for item in tickers:
+        try:
+            result = scan_single_stock_deep(
+                market="🇹🇼 台股 (TW)",
+                ticker=item['ticker'],
+                strategy="Isaac V3",
+                timeframe="1d",
+                data_source="yfinance",
+            )
+            if result is not None:
+                results.append({
+                    'ticker': item['ticker'],
+                    'name': item['name'],
+                    'source': item['source'],
+                    'scan': result,
+                })
+        except Exception as e:
+            logger.warning(f"掃描 {item['ticker']} 失敗: {e}")
+
+    # 寫入 scan_results.json
+    scan_data = {
+        'scan_time': datetime.now(TW_TZ).isoformat(),
+        'scheduler': 'apscheduler',
+        'total_scanned': len(tickers),
+        'results_count': len(results),
+        'results': results,
+    }
+
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(SCAN_RESULTS_PATH), suffix='.tmp'
+    )
+    with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+        json.dump(scan_data, f, ensure_ascii=False, indent=2, default=str)
+    os.replace(tmp_path, SCAN_RESULTS_PATH)
+
+    logger.info(f"每日掃描完成 — {len(results)}/{len(tickers)} 檔成功，已寫入 {SCAN_RESULTS_PATH}")
+
+
+def run_apscheduler():
+    """以 APScheduler BackgroundScheduler 獨立運行，每天 08:20 掃描市場。"""
+    import signal
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    scheduler = BackgroundScheduler(timezone='Asia/Taipei')
+    scheduler.add_job(
+        run_daily_market_scan,
+        trigger='cron',
+        hour=8,
+        minute=20,
+        id='daily_market_scan',
+        name='每日 08:20 市場掃描',
+        misfire_grace_time=3600,
+    )
+    scheduler.start()
+
+    logger.info("APScheduler 已啟動 — 每日 08:20 執行市場掃描")
+    logger.info("按 Ctrl+C 停止")
+
+    # Graceful shutdown
+    shutdown_event = False
+
+    def _signal_handler(signum, frame):
+        nonlocal shutdown_event
+        logger.info(f"收到信號 {signum}，正在關閉排程器...")
+        shutdown_event = True
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+    try:
+        while not shutdown_event:
+            time.sleep(1)
+    finally:
+        scheduler.shutdown(wait=False)
+        logger.info("APScheduler 已停止")
+
+
 if __name__ == '__main__':
-    main()
+    # 支援兩種模式:
+    #   python scheduler.py              → 原有的突破偵測循環
+    #   python scheduler.py --apscheduler → APScheduler 獨立排程
+    if '--apscheduler' in sys.argv:
+        sys.argv.remove('--apscheduler')
+        run_apscheduler()
+    else:
+        main()
