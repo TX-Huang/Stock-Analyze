@@ -15,7 +15,7 @@
 # Windows — 使用內嵌 Python
 ./python_embed/python.exe -m streamlit run app.py
 
-# 或雙擊 run_windows.bat
+# 或雙擊 start.bat
 ```
 
 ### API 金鑰設定
