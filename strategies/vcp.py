@@ -125,7 +125,8 @@ def run_vcp_strategy(api_token):
     from data.provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
-        report = safe_finlab_sim(position, resample='D', name='VCP 波動收縮策略', upload=False)
+        report = safe_finlab_sim(position, name='VCP V1.1 波動收縮策略', upload=False,
+                                trail_stop=0.15, position_limit=0.1)
         return report
     except Exception as e:
         logging.error(f"策略層級崩潰: {str(e)}", exc_info=True)

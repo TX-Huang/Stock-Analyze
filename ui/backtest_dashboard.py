@@ -5,6 +5,12 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 
 from ui.components import cyber_kpi_strip, cyber_header, cyber_alert
+from analysis.trade_analytics import (
+    compute_trade_efficiency, compute_edge_ratio, compute_profit_factor,
+    compute_expectancy, compute_monthly_seasonality, compute_rolling_sharpe,
+    compute_streaks, compute_underwater_days, compute_drawdown_recovery,
+    compute_market_regime_stats,
+)
 
 
 def _build_yearly_table(equity, trades):
@@ -92,6 +98,175 @@ def _build_position_changes(position):
     return pd.DataFrame(records)
 
 
+def _render_trade_analytics_tab(trades, equity, benchmark, strategy_name):
+    """交易品質分析 Tab — 三層深度分析"""
+    cyber_header("交易品質深度分析", subtitle=strategy_name)
+
+    if trades.empty:
+        cyber_alert("無交易", "無交易資料可分析", level="info")
+        return
+
+    # === Layer 1: 核心品質指標 ===
+    st.markdown("#### Layer 1: 交易品質")
+
+    efficiency = compute_trade_efficiency(trades)
+    edge_ratios = compute_edge_ratio(trades)
+    pf = compute_profit_factor(trades)
+    expectancy = compute_expectancy(trades)
+
+    eff_median = float(efficiency.median()) if len(efficiency.dropna()) > 0 else 0
+    er_median = float(edge_ratios.median()) if len(edge_ratios.dropna()) > 0 else 0
+    er_above_1 = float((edge_ratios > 1).mean() * 100) if len(edge_ratios.dropna()) > 0 else 0
+
+    cyber_kpi_strip([
+        {'label': 'Profit Factor', 'value': f"{pf:.2f}",
+         'color': '#22c55e' if pf > 1.5 else '#f59e0b', 'accent': '#22c55e'},
+        {'label': 'Expectancy', 'value': f"{expectancy*100:.2f}%",
+         'color': '#22c55e' if expectancy > 0 else '#ef4444', 'accent': '#00f0ff'},
+        {'label': 'Trade Efficiency', 'value': f"{eff_median:.1%}",
+         'color': '#22c55e' if eff_median > 0.3 else '#f59e0b', 'accent': '#8b5cf6'},
+        {'label': 'Edge Ratio (med)', 'value': f"{er_median:.2f}",
+         'color': '#22c55e' if er_median > 1.0 else '#ef4444', 'accent': '#00f0ff'},
+        {'label': 'Edge > 1.0', 'value': f"{er_above_1:.0f}%",
+         'accent': '#22c55e'},
+    ])
+
+    # Efficiency & Edge Ratio 分佈圖
+    col1, col2 = st.columns(2)
+    with col1:
+        if len(efficiency.dropna()) > 0:
+            fig_eff = go.Figure()
+            fig_eff.add_trace(go.Histogram(
+                x=efficiency.dropna().clip(-1, 1.5).values,
+                nbinsx=50, marker_color='#8b5cf6', opacity=0.7,
+            ))
+            fig_eff.add_vline(x=eff_median, line_dash="dash", line_color="#00f0ff",
+                             annotation_text=f"中位數 {eff_median:.2f}")
+            fig_eff.update_layout(
+                title="Trade Efficiency 分佈 (return/MFE)",
+                height=300, margin=dict(l=10, r=10, t=40, b=10),
+                xaxis_title="Efficiency", yaxis_title="次數",
+            )
+            st.plotly_chart(fig_eff, use_container_width=True)
+
+    with col2:
+        if len(edge_ratios.dropna()) > 0:
+            fig_er = go.Figure()
+            fig_er.add_trace(go.Histogram(
+                x=edge_ratios.dropna().clip(0, 5).values,
+                nbinsx=50, marker_color='#00f0ff', opacity=0.7,
+            ))
+            fig_er.add_vline(x=1.0, line_dash="dash", line_color="#ef4444",
+                             annotation_text="損益平衡線 1.0")
+            fig_er.update_layout(
+                title="Edge Ratio 分佈 (MFE/|MAE|)",
+                height=300, margin=dict(l=10, r=10, t=40, b=10),
+                xaxis_title="Edge Ratio", yaxis_title="次數",
+            )
+            st.plotly_chart(fig_er, use_container_width=True)
+
+    # === Layer 2: 時間與環境 ===
+    st.markdown("#### Layer 2: 時間與市場環境")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # 月份季節性
+        seasonality = compute_monthly_seasonality(trades)
+        if not seasonality.empty:
+            month_labels = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+            avg_ret_pct = seasonality['avg_return'] * 100
+            colors = ['#22c55e' if v >= 0 else '#ef4444' for v in avg_ret_pct]
+
+            fig_season = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_season.add_trace(go.Bar(
+                x=month_labels, y=avg_ret_pct,
+                marker_color=colors, name='平均報酬%',
+                text=[f"{v:.2f}%" for v in avg_ret_pct],
+                textposition='outside',
+            ), secondary_y=False)
+            fig_season.add_trace(go.Scatter(
+                x=month_labels, y=seasonality['win_rate'],
+                mode='lines+markers', name='勝率%',
+                line=dict(color='#00f0ff', width=2),
+            ), secondary_y=True)
+            fig_season.update_layout(
+                title="月份季節性分析", height=300,
+                margin=dict(l=10, r=10, t=40, b=10),
+                legend=dict(orientation='h', y=-0.15),
+            )
+            fig_season.update_yaxes(title_text="平均報酬%", secondary_y=False)
+            fig_season.update_yaxes(title_text="勝率%", secondary_y=True)
+            st.plotly_chart(fig_season, use_container_width=True)
+
+    with col2:
+        # 市場環境分析
+        regime_stats = compute_market_regime_stats(trades, benchmark)
+        if regime_stats:
+            regime_df = pd.DataFrame([
+                {'市場狀態': {'bull': '多頭', 'bear': '空頭', 'sideways': '盤整'}.get(k, k),
+                 '交易數': v['n_trades'],
+                 '勝率%': v['win_rate_pct'],
+                 '平均報酬%': v['avg_return_pct'],
+                 'Profit Factor': v['profit_factor'],
+                 '平均持有天': v['avg_hold_days']}
+                for k, v in regime_stats.items()
+            ])
+            st.markdown("**大盤環境績效比較**")
+            st.dataframe(regime_df, use_container_width=True, hide_index=True)
+
+    # Rolling Sharpe
+    if equity is not None:
+        rolling_sh = compute_rolling_sharpe(equity, window=60)
+        if len(rolling_sh) > 0:
+            fig_rs = go.Figure()
+            fig_rs.add_trace(go.Scatter(
+                x=rolling_sh.index, y=rolling_sh.values,
+                mode='lines', name='Rolling Sharpe (60d)',
+                line=dict(color='#00f0ff', width=1.5),
+            ))
+            fig_rs.add_hline(y=0, line_dash="dash", line_color="#ef4444", opacity=0.5)
+            fig_rs.add_hline(y=1.0, line_dash="dot", line_color="#22c55e", opacity=0.5,
+                            annotation_text="Sharpe=1.0")
+
+            # 標記負 Sharpe 區域
+            neg_pct = (rolling_sh < 0).mean() * 100
+            fig_rs.update_layout(
+                title=f"Rolling Sharpe (60d) — 負值時段佔 {neg_pct:.0f}%",
+                height=300, margin=dict(l=10, r=10, t=40, b=10),
+                yaxis_title="Sharpe Ratio",
+            )
+            st.plotly_chart(fig_rs, use_container_width=True)
+
+    # === Layer 3: 連續性與穩定度 ===
+    st.markdown("#### Layer 3: 連續性與穩定度")
+
+    col1, col2, col3 = st.columns(3)
+
+    streaks = compute_streaks(trades)
+    with col1:
+        st.metric("最長連勝", f"{streaks.get('max_win_streak', 0)} 筆")
+        st.metric("平均連勝", f"{streaks.get('avg_win_streak', 0)} 筆")
+    with col2:
+        st.metric("最長連敗", f"{streaks.get('max_loss_streak', 0)} 筆")
+        st.metric("平均連敗", f"{streaks.get('avg_loss_streak', 0)} 筆")
+
+    if equity is not None:
+        uw = compute_underwater_days(equity)
+        with col3:
+            st.metric("最長水下天數", f"{uw.get('max_underwater_days', 0)} 天")
+            st.metric("目前水下天數", f"{uw.get('current_underwater_days', 0)} 天")
+
+    # Drawdown Recovery 表格
+    if equity is not None:
+        dd_events = compute_drawdown_recovery(equity)
+        if dd_events:
+            st.markdown("**Top 10 回撤恢復分析**")
+            dd_df = pd.DataFrame(dd_events[:10])
+            dd_df.columns = ['起始日', '谷底日', '恢復日', '深度%', '下跌天數', '恢復天數', '總天數']
+            st.dataframe(dd_df, use_container_width=True, hide_index=True, height=300)
+
+
 def render_backtest_dashboard(report, strategy_name="custom"):
     """
     通用型回測儀表板渲染函數
@@ -116,10 +291,11 @@ def render_backtest_dashboard(report, strategy_name="custom"):
 
     exposure = stats.get('exposure', (equity != equity.shift(1)).mean() if equity is not None else 0)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "實戰戰情室",
         "資金曲線",
         "逐年績效",
+        "交易品質分析",
         "持倉異動",
         "交易明細",
     ])
@@ -232,6 +408,9 @@ def render_backtest_dashboard(report, strategy_name="custom"):
             cyber_alert("缺少資料", "缺少 equity curve — 請先執行回測", level="warn")
 
     with tab4:
+        _render_trade_analytics_tab(trades, equity, benchmark, strategy_name)
+
+    with tab5:
         cyber_header("持倉異動紀錄")
         changes_df = _build_position_changes(position)
         if not changes_df.empty:
@@ -261,7 +440,7 @@ def render_backtest_dashboard(report, strategy_name="custom"):
         else:
             cyber_alert("無異動", "此策略尚無持倉異動紀錄", level="info")
 
-    with tab5:
+    with tab6:
         cyber_header("詳細交易紀錄")
         if not trades.empty:
             rename_map = {

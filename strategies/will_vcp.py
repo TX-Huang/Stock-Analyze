@@ -45,7 +45,7 @@ def run_will_vcp_strategy(api_token, params=None):
         'start_date': '2008-01-01',
         'end_date': '2026-12-31',
         'max_positions': 10,
-        'trail_stop': 0.15,           # 追蹤停損 15%
+        'trail_stop': 0.25,           # 追蹤停損 25% (V2.0: 從 15% 放寬，CAGR +3.49%, Sharpe +0.072)
         'weekly_ma_fast': 30,         # 週線快均
         'weekly_ma_slow': 40,         # 週線慢均
         'breakout_window': 20,        # 突破回顧天數
@@ -53,6 +53,10 @@ def run_will_vcp_strategy(api_token, params=None):
         'vol_avg_window': 60,         # 量能均線天數
         'liquidity_threshold': 500_000,  # 流動性門檻（股）
         'min_price': 20,              # 最低股價
+        # V2.0 新增參數
+        'confirm_days': 1,            # 突破確認天數 (1=不確認, 2=2日確認)
+        'dynamic_exposure': False,    # 0050 動態曝險
+        'time_stop_days': 0,          # 時間停損 (0=停用)
     }
     if params:
         p.update(params)
@@ -168,7 +172,15 @@ def run_will_vcp_strategy(api_token, params=None):
     # =========================================================
     bw = p['breakout_window']
     prev_high = high.rolling(bw, min_periods=bw).max().shift(1)
-    breakout = (close > prev_high).fillna(False)
+    breakout_1d = (close > prev_high).fillna(False)
+    # [V2.0] 突破確認: 需連續 N 天收盤高於前高
+    _confirm = int(p.get('confirm_days', 1))
+    if _confirm >= 2:
+        breakout = breakout_1d.copy()
+        for d in range(1, _confirm):
+            breakout = breakout & breakout_1d.shift(d).fillna(False)
+    else:
+        breakout = breakout_1d
     close_near_high = (close >= (high * p['close_near_high_pct'])).fillna(False)
 
     # =========================================================
@@ -193,6 +205,41 @@ def run_will_vcp_strategy(api_token, params=None):
         nstocks_limit=p['max_positions'],
         rank=score
     )
+
+    # =========================================================
+    # 9-2. [V2.0] 動態曝險 (仿 Isaac V3.5)
+    # =========================================================
+    if p.get('dynamic_exposure', False):
+        try:
+            bench_close = data.get('price:收盤價')['0050'].reindex(close.index).ffill()
+            bench_ma60 = bench_close.rolling(60, min_periods=60).mean()
+            bench_ma120 = bench_close.rolling(120, min_periods=120).mean()
+
+            exposure = pd.Series(1.0, index=position.index)
+            exposure[bench_close <= bench_ma120] = 0.3
+            exposure[(bench_close <= bench_ma60) & (bench_close > bench_ma120)] = 0.6
+
+            position = position.mul(exposure, axis=0)
+            logger.info("Will VCP V2.0: 動態曝險已啟用")
+        except Exception as e:
+            logger.warning(f"Will VCP: 動態曝險載入失敗 — {e}")
+
+    # =========================================================
+    # 9-3. [V2.0] 時間停損
+    # =========================================================
+    _time_stop = int(p.get('time_stop_days', 0))
+    if _time_stop > 0:
+        is_holding = (position != 0).astype(int)
+        hold_days = is_holding.copy().astype(float)
+        for i in range(1, len(hold_days)):
+            mask_h = is_holding.iloc[i] > 0
+            hold_days.iloc[i, mask_h] = hold_days.iloc[i-1][mask_h] + 1
+
+        close_ts = close.reindex(position.index).ffill()
+        price_change = close_ts / close_ts.shift(_time_stop) - 1
+        time_stop_mask = (hold_days >= _time_stop) & (price_change <= 0)
+        position[time_stop_mask] = 0
+        logger.info(f"Will VCP V2.0: 時間停損 {_time_stop}d 已啟用")
 
     # =========================================================
     # 10. Debug Logging

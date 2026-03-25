@@ -101,21 +101,9 @@ with st.sidebar:
     st.markdown('<div class="cyber-title" style="font-size:1.2rem;">全域量化終端</div>', unsafe_allow_html=True)
     st.markdown('<div class="cyber-subtitle" style="font-size:0.7rem;">v200 CYBER TERMINAL</div>', unsafe_allow_html=True)
 
-    # --- Quick Search Bar (P4-3) ---
-    quick_search = st.text_input(
-        "🔍 快速搜尋",
-        placeholder="股票代碼或名稱 (如 2330, NVDA, 台積電)",
-        label_visibility="collapsed",
-        key="global_search",
-    )
-    if quick_search and quick_search.strip():
-        st.session_state['pending_analysis'] = quick_search.strip()
-        st.session_state['_force_research'] = True
-
     app_mode = st.radio(
         "nav",
         [
-            "🎯 AI 戰情室",
             "📊 交易總覽",
             "🔍 研究分析",
             "⚡ 交易執行",
@@ -124,11 +112,6 @@ with st.sidebar:
         ],
         label_visibility="collapsed",
     )
-
-    # Override navigation if search triggered
-    if st.session_state.get('_force_research'):
-        app_mode = "🔍 研究分析"
-        st.session_state['_force_research'] = False
 
     # --- API Keys from secrets.toml ---
     def _get_secret(key, fallback=""):
@@ -169,8 +152,8 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # Research / War Room sidebar controls
-    if app_mode in ("🔍 研究分析", "🎯 AI 戰情室"):
+    # Research sidebar controls
+    if app_mode == "🔍 研究分析":
         st.divider()
         market_mode = st.radio("市場", ["🇹🇼 台股 (TW)", "🗽 美股 (US)"],
                                index=0 if "台股" in st.session_state.market_mode else 1,
@@ -227,12 +210,7 @@ if not _has_any_key and app_mode == "📊 交易總覽":
 # Module Router (5 pages)
 # ==========================================
 
-if app_mode == "🎯 AI 戰情室":
-    from ui.pages.war_room import render as render_war_room
-    render_war_room(client=client, market_mode=market_mode, strategy_mode=strategy_mode,
-                    tf_code=tf_code, is_weekly=is_weekly)
-
-elif app_mode == "📊 交易總覽":
+if app_mode == "📊 交易總覽":
     from ui.pages.dashboard import render
     render()
 

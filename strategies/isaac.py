@@ -779,10 +779,13 @@ def _build_position(signals, technicals, data_dict, params, minervini_mode):
         dict: 包含 final_pos, hedge_factor, 以及用於 raw_mode 的輔助數據
     """
     p = params or {}
-    _min_score         = float(p.get('min_score',         4))
+    _min_score         = float(p.get('min_score',         6))  # V3.9: 從 4 提高至 6 (CAGR +0.80%, MDD +5.08%, Sharpe +0.091)
     _max_per_industry  = int(p.get('max_per_industry',    0))
     _time_stop_days    = int(p.get('time_stop_days',      0))
     _trail_stop        = float(p.get('trail_stop',        0.18))
+    _early_exit_days   = int(p.get('early_exit_days',     0))
+    _early_exit_threshold = float(p.get('early_exit_threshold', -0.02))
+    _adaptive_exit     = bool(p.get('adaptive_exit',      False))
 
     close = data_dict['close']
     master_index = data_dict['master_index']
@@ -1002,6 +1005,42 @@ def _build_position(signals, technicals, data_dict, params, minervini_mode):
         # 持倉超過 N 天且報酬 <= 0 → 強制出場
         time_stop_mask = (hold_days >= _time_stop_days) & (price_change <= 0)
         final_pos[time_stop_mask] = 0
+
+    # [V3.9] 快速停損: 進場 N 天內報酬 < threshold → 出場 (砍假突破)
+    if _early_exit_days > 0:
+        is_holding_ee = (final_pos != 0).astype(int)
+        hold_days_ee = is_holding_ee.copy().astype(float)
+        for i in range(1, len(hold_days_ee)):
+            mask_ee = is_holding_ee.iloc[i] > 0
+            hold_days_ee.iloc[i, mask_ee] = hold_days_ee.iloc[i-1][mask_ee] + 1
+
+        close_df_ee = close.reindex(final_pos.index).ffill()
+        # 計算從進場到現在的報酬 (用 shift(hold_days) 近似)
+        price_at_entry = close_df_ee.copy()
+        for d in range(1, _early_exit_days + 1):
+            day_mask = (hold_days_ee == d)
+            price_at_entry[day_mask] = close_df_ee.shift(d)[day_mask]
+        ret_since_entry = close_df_ee / price_at_entry - 1
+
+        early_exit_mask = (
+            (hold_days_ee > 0) &
+            (hold_days_ee <= _early_exit_days) &
+            (ret_since_entry <= _early_exit_threshold)
+        )
+        final_pos[early_exit_mask] = 0
+
+    # [V3.9] Adaptive Exit: 低分交易用 MA20 出場 (更緊停損)
+    if _adaptive_exit:
+        v_ma20_ae = technicals.get('v_ma20')
+        if v_ma20_ae is not None:
+            low_score_mask = (final_pos > 0) & (final_pos < 7)
+            close_aligned = close.reindex(final_pos.index).ffill()
+            ma20_df = pd.DataFrame(v_ma20_ae, index=final_pos.index, columns=final_pos.columns) \
+                if not isinstance(v_ma20_ae, pd.DataFrame) \
+                else v_ma20_ae.reindex(index=final_pos.index, columns=final_pos.columns)
+            ma20_break = close_aligned < ma20_df
+            adaptive_mask = low_score_mask & ma20_break
+            final_pos[adaptive_mask] = 0
 
     # 信號品質檢查
     if final_pos.abs().sum().sum() == 0:
