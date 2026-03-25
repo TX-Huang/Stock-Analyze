@@ -20,7 +20,6 @@ logs/
 
 # Log files
 *.log
-finlab_debug.log
 
 # Environment & secrets
 .env
@@ -34,3 +33,36 @@ finlab_debug.log
 *.egg-info/
 dist/
 build/
+
+# gstack binary & build artifacts (578MB total — only SKILL.md needs to be readable)
+.claude/skills/gstack/browse/
+.claude/skills/gstack/bin/
+.claude/skills/gstack/node_modules/
+.claude/skills/gstack/test/
+.claude/skills/gstack/scripts/
+.claude/skills/gstack/.git/
+.claude/skills/browse/
+
+# gstack local state
+.gstack/
+
+# Root-level result/stats JSON files (test artifacts, not source code)
+*_result.json
+*_stats.json
+cross_comparison.json
+
+# Additional large files
+SYSTEM_AUDIT_REPORT.md
+
+# Test cache
+.pytest_cache/
+
+# Trading module (separate project)
+sj-trading/
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Installer
+installer/
