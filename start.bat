@@ -1,9 +1,10 @@
 @echo off
-title Quant Terminal v200
+title AI Invest HQ v3.0.0
 echo.
 echo  ========================================
-echo   Quant Terminal v200 - Cyber Trading
-echo   Powered by Isaac V3.7
+echo   AI Invest HQ v3.0.0
+echo   Alpha Global Quant Trading Platform
+echo   Powered by Isaac V3.7 + Will VCP
 echo  ========================================
 echo.
 cd /d "%~dp0"

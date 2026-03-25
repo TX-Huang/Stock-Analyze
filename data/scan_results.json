@@ -1,30 +1,33 @@
 {
-  "scan_time": "2026-03-23T22:42:03.414708",
+  "scan_time": "2026-03-24T20:23:04.998825",
   "total_scanned": 3,
   "signals_count": 0,
   "critical_count": 0,
   "results": [
     {
-      "ticker": "3709",
-      "name": "鑫聯大投控",
-      "source": "portfolio",
-      "price": 66.5999984741211,
-      "resistance": 77.5,
-      "resistance_score": 1,
+      "ticker": "6531",
+      "name": "愛普*",
+      "source": "watchlist",
+      "price": 501.0,
+      "resistance": 581.1161616161617,
+      "resistance_score": 3,
       "resistance_methods": [
-        "Swing"
+        "趨勢線",
+        "Swing",
+        "量能"
       ],
-      "support": 62.05125064849854,
-      "support_score": 1,
+      "support": 405.5,
+      "support_score": 2,
       "support_methods": [
+        "趨勢線",
         "量能"
       ],
       "signal": null,
       "signal_info": null,
-      "distance_to_resistance_pct": 0.16366369032447267,
-      "distance_to_support_pct": 0.06829951846605631,
-      "volume_ratio": 0.3727019525794768,
-      "daily_change_pct": -0.04447630717147793,
+      "distance_to_resistance_pct": 0.15991249823585163,
+      "distance_to_support_pct": 0.1906187624750499,
+      "volume_ratio": 1.9290438965724594,
+      "daily_change_pct": -0.04206500956022945,
       "vcp_score": 0,
       "vcp_conditions": {
         "contraction": false,
@@ -39,28 +42,61 @@
       }
     },
     {
-      "ticker": "2360",
-      "name": "致茂",
+      "ticker": "2330",
+      "name": "台積電",
       "source": "portfolio",
-      "price": 1520.0,
-      "resistance": 1600.1675925925927,
-      "resistance_score": 3,
+      "price": 1810.0,
+      "resistance": 1995.0,
+      "resistance_score": 1,
       "resistance_methods": [
-        "趨勢線",
+        "Swing"
+      ],
+      "support": 1445.4375,
+      "support_score": 2,
+      "support_methods": [
         "Swing",
         "量能"
       ],
-      "support": 795.975,
+      "signal": null,
+      "signal_info": null,
+      "distance_to_resistance_pct": 0.10220994475138122,
+      "distance_to_support_pct": 0.20141574585635358,
+      "volume_ratio": 1.0641589394038835,
+      "daily_change_pct": 0.0,
+      "vcp_score": 0,
+      "vcp_conditions": {
+        "contraction": false,
+        "volume_dry": false,
+        "higher_low": false,
+        "trend_healthy": false
+      },
+      "vcp_details": {
+        "bandwidth_pctl": 1.0,
+        "vol_dry_days": 0,
+        "low_change_pct": 0
+      }
+    },
+    {
+      "ticker": "3709",
+      "name": "鑫聯大投控",
+      "source": "portfolio",
+      "price": 67.1,
+      "resistance": 77.5,
+      "resistance_score": 1,
+      "resistance_methods": [
+        "Swing"
+      ],
+      "support": 60.75625,
       "support_score": 1,
       "support_methods": [
         "量能"
       ],
       "signal": null,
       "signal_info": null,
-      "distance_to_resistance_pct": 0.052741837231968854,
-      "distance_to_support_pct": 0.47633223684210524,
-      "volume_ratio": 0.9500344025601479,
-      "daily_change_pct": -0.04100946372239748,
+      "distance_to_resistance_pct": 0.1549925484351715,
+      "distance_to_support_pct": 0.09454172876304014,
+      "volume_ratio": 0.5329472133313011,
+      "daily_change_pct": 0.007507507507507508,
       "vcp_score": 0,
       "vcp_conditions": {
         "contraction": false,
