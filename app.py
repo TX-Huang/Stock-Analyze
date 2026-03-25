@@ -39,15 +39,22 @@ except Exception:
 
 if _auth_available:
     with st.sidebar:
-        name, authentication_status, username = _authenticator.login(
-            location='sidebar',
-            fields={
-                'Form name': '登入',
-                'Username': '使用者名稱',
-                'Password': '密碼',
-                'Login': '登入',
-            },
-        )
+        try:
+            _authenticator.login(
+                location='sidebar',
+                fields={
+                    'Form name': '登入',
+                    'Username': '使用者名稱',
+                    'Password': '密碼',
+                    'Login': '登入',
+                },
+            )
+        except TypeError:
+            # v0.4.x: login() returns None, status in session_state
+            _authenticator.login()
+
+    authentication_status = st.session_state.get('authentication_status')
+    name = st.session_state.get('name', '')
 
     if authentication_status is False:
         st.sidebar.error('使用者名稱或密碼錯誤')
@@ -66,7 +73,10 @@ if _auth_available:
                 f'👤 {name}</div>',
                 unsafe_allow_html=True,
             )
-            _authenticator.logout('登出', 'sidebar')
+            try:
+                _authenticator.logout('登出', 'sidebar')
+            except TypeError:
+                _authenticator.logout()
 
 # --- Theme + State ---
 inject_cyber_theme()
