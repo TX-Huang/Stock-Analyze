@@ -6,5 +6,5 @@ credentials:
 
 cookie:
   name: ai_invest_hq
-  key: ai_invest_hq_secret_key_2026
-  expiry_days: 30
+  key: 0b068d03b2ee077b2ccfebf63e6c82abe5f0b242c60cfbde0d01bb43326f5cbb
+  expiry_days: 7

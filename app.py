@@ -17,25 +17,39 @@ pd.set_option("styler.render.max_elements", 1_000_000)
 
 # --- Authentication (graceful degradation) ---
 _auth_available = False
+_auth_lib_installed = False
 try:
     import streamlit_authenticator as stauth
     import yaml
     from yaml.loader import SafeLoader
+    _auth_lib_installed = True
+except ImportError:
+    _auth_lib_installed = False
 
+if _auth_lib_installed:
     _auth_config_path = os.path.join(os.path.dirname(__file__), 'config', 'auth_config.yaml')
-    if os.path.exists(_auth_config_path):
-        with open(_auth_config_path, 'r', encoding='utf-8') as _f:
-            _auth_config = yaml.load(_f, Loader=SafeLoader)
-
-        _authenticator = stauth.Authenticate(
-            _auth_config['credentials'],
-            _auth_config['cookie']['name'],
-            _auth_config['cookie']['key'],
-            _auth_config['cookie']['expiry_days'],
-        )
-        _auth_available = True
-except Exception:
-    _auth_available = False
+    if not os.path.exists(_auth_config_path):
+        st.error("認證設定檔 config/auth_config.yaml 不存在，無法啟動應用。")
+        st.stop()
+    else:
+        try:
+            with open(_auth_config_path, 'r', encoding='utf-8') as _f:
+                _auth_config = yaml.load(_f, Loader=SafeLoader)
+            if not _auth_config or 'credentials' not in _auth_config or 'cookie' not in _auth_config:
+                st.error("認證設定檔 config/auth_config.yaml 格式錯誤，無法啟動應用。")
+                st.stop()
+            _authenticator = stauth.Authenticate(
+                _auth_config['credentials'],
+                _auth_config['cookie']['name'],
+                _auth_config['cookie']['key'],
+                _auth_config['cookie']['expiry_days'],
+            )
+            _auth_available = True
+        except Exception as e:
+            st.error(f"認證設定檔載入失敗: {e}")
+            st.stop()
+else:
+    st.sidebar.warning("⚠️ 認證系統未啟用（開發模式）")
 
 if _auth_available:
     with st.sidebar:

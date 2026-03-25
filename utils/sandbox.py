@@ -26,6 +26,10 @@ BLOCKED_FUNCTIONS = {
 def validate_strategy_safety(source_code: str) -> tuple[bool, list[str]]:
     """Validate uploaded strategy code for safety.
 
+    WARNING: AST validation alone is insufficient for fully sandboxing untrusted
+    code. This provides a first layer of defense but should be combined with
+    process-level isolation (e.g., Docker, seccomp) for production use.
+
     Returns:
         (is_safe, list_of_warnings)
     """
@@ -35,6 +39,27 @@ def validate_strategy_safety(source_code: str) -> tuple[bool, list[str]]:
         tree = ast.parse(source_code)
     except SyntaxError as e:
         return False, [f"Syntax error: {e}"]
+
+    # Pre-scan: detect string concatenation that could build dangerous names
+    # e.g. "ev" + "al", "ex" + "ec", "im" + "port", "op" + "en"
+    _DANGEROUS_CONCAT_TARGETS = {'eval', 'exec', 'import', 'open', '__import__', 'compile'}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            # Check if both sides are string constants
+            left = getattr(node.left, 'value', None) if isinstance(node.left, ast.Constant) else None
+            right = getattr(node.right, 'value', None) if isinstance(node.right, ast.Constant) else None
+            if isinstance(left, str) and isinstance(right, str):
+                combined = left + right
+                if combined.lower() in _DANGEROUS_CONCAT_TARGETS:
+                    warnings.append(f"❌ 禁止的字串拼接 (可能規避檢查): '{left}' + '{right}' = '{combined}'")
+
+        # Block getattr() on __builtins__
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id == 'getattr':
+                if node.args:
+                    first_arg = node.args[0]
+                    if isinstance(first_arg, ast.Name) and first_arg.id == '__builtins__':
+                        warnings.append("❌ 禁止的呼叫: getattr(__builtins__, ...)")
 
     for node in ast.walk(tree):
         # Check imports

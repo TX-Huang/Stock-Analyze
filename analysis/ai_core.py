@@ -7,8 +7,29 @@ from utils.helpers import robust_json_extract
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_prompt_input(text: str, max_length: int = 500) -> str:
+    """Sanitize user input before embedding into LLM prompts.
+
+    - Strips instruction-like patterns (system/assistant role injections)
+    - Removes backtick fences and curly-brace instruction blocks
+    - Truncates to max_length
+    """
+    original = text
+    text = str(text).strip()
+    # Remove instruction injection attempts
+    text = re.sub(r'(?i)(system\s*:|assistant\s*:|<<\s*SYS\s*>>|<\|im_start\|>|<\|im_end\|>)', '', text)
+    # Remove backtick code fences that could wrap injected instructions
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Remove curly-brace blocks that look like template injections
+    text = re.sub(r'\{[^}]{20,}\}', '', text)
+    text = text[:max_length]
+    if text != original:
+        logger.warning(f"Prompt input sanitized: original length={len(original)}, sanitized length={len(text)}")
+    return text
+
+
 def resolve_ticker_and_market(query, client=None, gemini_model=None):
-    query = str(query).strip()
+    query = _sanitize_prompt_input(str(query).strip(), max_length=100)
     if re.match(r'^\d{4,6}$', query):
         return query, "🇹🇼 台股 (TW)", query
     if re.match(r'^[A-Z]{1,5}$', query.upper()):
@@ -80,6 +101,7 @@ def analyze_signals(df):
 def detect_hot_themes(market, client=None, gemini_model=None):
     if not client:
         return []
+    market = _sanitize_prompt_input(str(market), max_length=100)
     q = "今日台股熱門族群" if "台股" in market else "Top US sectors today"
     prompt = f"搜'{q}'，歸納3~5個主題，回傳List JSON (純文字列表)。"
     try:
@@ -93,6 +115,7 @@ def detect_hot_themes(market, client=None, gemini_model=None):
 def generate_supply_chain_structure(market, keyword, client=None, gemini_model=None):
     if not client:
         return None
+    keyword = _sanitize_prompt_input(str(keyword), max_length=100)
     prompt = f"拆解'{keyword}'產業鏈，回傳JSON: {{'部位': {{'代碼': '中文名'}}}}"
     try:
         res = client.models.generate_content(model=gemini_model, contents=prompt)
@@ -107,6 +130,11 @@ def generate_ai_analysis(market, ticker, name, price, change, sector, technicals
                          client=None, gemini_model=None):
     if not client:
         return "請先輸入 API Key。"
+    # Sanitize user-controllable inputs
+    ticker = _sanitize_prompt_input(str(ticker), max_length=100)
+    name = _sanitize_prompt_input(str(name), max_length=100)
+    signal_context = _sanitize_prompt_input(str(signal_context), max_length=500)
+    extra_data = _sanitize_prompt_input(str(extra_data), max_length=500)
     desc = "週線(Weekly)" if timeframe == "1wk" else "日線(Daily)"
     prompt = f"""
     角色：全方位技術分析大師。標的：{market} {ticker} {name}。

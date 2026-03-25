@@ -3,6 +3,7 @@
 任何頁面呼叫 render_stock_profile(ticker) 即可展開完整個股資訊。
 整合：K線圖 + 基本面 + 籌碼面 + 突破信號 + 持倉狀態 + 操作按鈕
 """
+import html
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -287,10 +288,11 @@ def render_stock_profile(ticker, show_actions=True, market_type=None):
                     with st.expander("🤖 AI 解讀", expanded=False):
                         narrative = generate_ai_narrative(ticker, thesis, _client=client)
                         if narrative:
+                            safe_narrative = html.escape(narrative)
                             st.markdown(
                                 f'<div style="font-size:0.8rem;color:#cbd5e1;line-height:1.6;'
                                 f'padding:8px;background:rgba(0,0,0,0.2);border-radius:6px;'
-                                f'border-left:3px solid var(--neon-cyan)">{narrative}</div>',
+                                f'border-left:3px solid var(--neon-cyan)">{safe_narrative}</div>',
                                 unsafe_allow_html=True,
                             )
                         else:

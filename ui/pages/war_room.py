@@ -7,6 +7,7 @@ Layers:
 3. Portfolio risk summary — exposure, unrealized P&L, warnings
 4. Quick diagnosis search bar — inline stock report
 """
+import html
 import streamlit as st
 import logging
 import os
@@ -507,7 +508,7 @@ def _render_quick_diagnosis():
                 f'text-align:center;padding:12px;'
                 f'text-shadow:0 0 8px rgba(0,240,255,0.5) }}'
                 f'</style>'
-                f'<div class="war-loading">{market_flag} AI 正在分析 {target_ticker}...</div>',
+                f'<div class="war-loading">{market_flag} AI 正在分析 {html.escape(target_ticker)}...</div>',
                 unsafe_allow_html=True,
             )
             _render_inline_report(target_ticker, market_type=market_type)
@@ -520,7 +521,7 @@ def _render_inline_report(ticker, market_type="TW"):
         f'<div style="margin:8px 0 4px;padding:6px 12px;background:rgba(0,240,255,0.04);'
         f'border:1px solid rgba(0,240,255,0.12);border-radius:6px">'
         f'<span style="font-size:0.72rem;color:var(--neon-cyan);font-family:JetBrains Mono,monospace">'
-        f'{market_flag} DIAGNOSING: {ticker}</span></div>',
+        f'{market_flag} DIAGNOSING: {html.escape(ticker)}</span></div>',
         unsafe_allow_html=True,
     )
 

@@ -3,6 +3,7 @@ Telegram Bot 指令處理器
 支援: /scan, /portfolio, /add, /remove, /risk, /daily, /cc + AI 對話
 """
 import json
+import logging
 import os
 import sys
 import asyncio
@@ -370,6 +371,12 @@ async def paper_history_handler(update: Update, context: ContextTypes.DEFAULT_TY
 # /cc — Claude Code CLI 整合
 # ==========================================
 
+_cc_logger = logging.getLogger(__name__ + '.cc')
+
+# Command allowlist — only read-only / analysis commands are permitted
+_CC_ALLOWED_PREFIXES = ['分析', '查詢', '搜尋', '回測', '報告', 'analyze', 'search', 'report', 'backtest']
+
+
 def _run_claude_cli(prompt):
     """同步呼叫 Claude Code CLI"""
     if not os.path.exists(CLAUDE_CLI):
@@ -412,13 +419,22 @@ async def cc_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "用法: /cc <指令>\n"
             "例如:\n"
-            "  /cc 幫我跑一次 Isaac 回測\n"
+            "  /cc 回測 Isaac 策略\n"
             "  /cc 分析 strategies/isaac.py 的 Signal A 邏輯\n"
-            "  /cc 今天策略推薦哪些股票"
+            "  /cc 報告今天策略推薦哪些股票"
         )
         return
 
     prompt = ' '.join(context.args)
+
+    # Security: command allowlist — only analysis/read-only prompts permitted
+    prompt_lower = prompt.strip().lower()
+    if not any(prompt_lower.startswith(prefix) for prefix in _CC_ALLOWED_PREFIXES):
+        _cc_logger.warning(f"Blocked /cc command from chat_id={update.effective_chat.id}: {prompt[:200]}")
+        await update.message.reply_text("此指令未被允許。僅支援分析類指令。")
+        return
+
+    _cc_logger.info(f"/cc invoked by chat_id={update.effective_chat.id}: {prompt[:200]}")
     await update.message.reply_text(f"正在執行 Claude Code...\n指令: {prompt[:100]}")
 
     result = await _run_with_typing(
