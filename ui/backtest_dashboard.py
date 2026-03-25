@@ -445,14 +445,23 @@ def render_backtest_dashboard(report, strategy_name="custom"):
         if not trades.empty:
             rename_map = {
                 "stock_id": "股票代碼",
+                "industry": "產業",
                 "entry_date": "進場日期",
                 "exit_date": "出場日期",
+                "trade_price@entry_date": "進場價",
+                "trade_price@exit_date": "出場價",
                 "entry_price": "進場價",
                 "exit_price": "出場價",
                 "return": "報酬率",
-                "mae": "最大不利(MAE)",
-                "mfe": "最大有利(MFE)",
-                "period": "持有天數"
+                "mae": "MAE",
+                "gmfe": "GMFE",
+                "bmfe": "BMFE",
+                "mdd": "交易MDD",
+                "period": "持有天數",
+                "pdays": "獲利天數",
+                "position": "配置比重",
+                "volume@entry_date": "進場量(股)",
+                "turnover@entry_date": "進場額(元)",
             }
 
             trades_display = trades.copy()
@@ -497,10 +506,24 @@ def render_backtest_dashboard(report, strategy_name="custom"):
 
             st.caption(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
 
-            available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
+            available_cols = [
+                '股票代碼', '產業', '進場日期', '出場日期',
+                '進場價', '出場價', '報酬率', '持有天數', '獲利天數',
+                'MAE', 'GMFE', 'BMFE', '交易MDD',
+                '配置比重', '進場量(股)', '進場額(元)',
+            ]
             cols_to_show = [c for c in available_cols if c in trades_filtered.columns]
 
             trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
+
+            # 格式化進場量/進場額為易讀數字
+            if '進場量(股)' in trades_final.columns:
+                trades_final['進場量(股)'] = trades_final['進場量(股)'].fillna(0).astype(int)
+            if '進場額(元)' in trades_final.columns:
+                trades_final['進場額(元)'] = (trades_final['進場額(元)'].fillna(0) / 1e4).round(0).astype(int)
+                trades_final.rename(columns={'進場額(元)': '進場額(萬)'}, inplace=True)
+            if '獲利天數' in trades_final.columns:
+                trades_final['獲利天數'] = trades_final['獲利天數'].fillna(0).astype(int)
 
             def highlight_ret(val):
                 if pd.isna(val):
@@ -509,14 +532,14 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                     return 'color: #ef4444' if val > 0 else 'color: #22c55e'
                 return ''
 
+            pct_cols = {c: '{:.2%}' for c in ['報酬率', 'MAE', 'GMFE', 'BMFE', '交易MDD'] if c in trades_final.columns}
+            price_cols = {c: '{:.2f}' for c in ['進場價', '出場價', '配置比重'] if c in trades_final.columns}
+            fmt = {**pct_cols, **price_cols}
+
+            highlight_subset = [c for c in ['報酬率'] if c in trades_final.columns]
+
             st.dataframe(
-                trades_final.style.format({
-                    '報酬率': '{:.2%}',
-                    '最大不利(MAE)': '{:.2%}',
-                    '最大有利(MFE)': '{:.2%}',
-                    '進場價': '{:.2f}',
-                    '出場價': '{:.2f}'
-                }, na_rep="N/A").map(highlight_ret, subset=['報酬率']),
+                trades_final.style.format(fmt, na_rep="N/A").map(highlight_ret, subset=highlight_subset),
                 use_container_width=True,
                 height=600
             )

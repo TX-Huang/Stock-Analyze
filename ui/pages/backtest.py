@@ -450,12 +450,22 @@ def render(_embedded=False):
         # ------ TAB: Trade Details ------
         with tab3:
             if not trades.empty:
-                rename_map = {"stock_id": "代碼", "entry_date": "進場", "exit_date": "出場",
-                              "entry_price": "進場價", "exit_price": "出場價", "return": "報酬率",
-                              "mae": "MAE", "mfe": "MFE", "period": "天數"}
+                rename_map = {
+                    "stock_id": "代碼", "industry": "產業",
+                    "entry_date": "進場", "exit_date": "出場",
+                    "trade_price@entry_date": "進場價", "trade_price@exit_date": "出場價",
+                    "entry_price": "進場價", "exit_price": "出場價",
+                    "return": "報酬率", "period": "天數", "pdays": "獲利天數",
+                    "mae": "MAE", "gmfe": "GMFE", "bmfe": "BMFE", "mdd": "交易MDD",
+                    "position": "配置比重",
+                    "volume@entry_date": "進場量(股)", "turnover@entry_date": "進場額(萬)",
+                }
                 td = trades.copy(); td.rename(columns=rename_map, inplace=True)
-                if '進場' in td.columns: td['進場'] = pd.to_datetime(td['進場'])
-                if '出場' in td.columns: td['出場'] = pd.to_datetime(td['出場'], errors='coerce')
+                if '進場' in td.columns: td['進場'] = pd.to_datetime(td['進場']).dt.strftime('%Y-%m-%d')
+                if '出場' in td.columns: td['出場'] = pd.to_datetime(td['出場'], errors='coerce').dt.strftime('%Y-%m-%d')
+                if '獲利天數' in td.columns: td['獲利天數'] = td['獲利天數'].apply(lambda x: int(x) if pd.notna(x) else x)
+                if '進場量(股)' in td.columns: td['進場量(股)'] = td['進場量(股)'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else x)
+                if '進場額(萬)' in td.columns: td['進場額(萬)'] = td['進場額(萬)'].apply(lambda x: round(x / 1e4, 1) if pd.notna(x) else x)
 
                 csv = td.to_csv(index=False).encode('utf-8-sig')
                 st.download_button("📥 下載交易明細 (.csv)", data=csv,
@@ -463,13 +473,25 @@ def render(_embedded=False):
 
                 def hl(val):
                     if pd.isna(val): return ''
-                    if isinstance(val, (int, float)): return 'color: #ef4444' if val > 0 else 'color: #22c55e'
+                    if isinstance(val, (int, float)): return 'color: #ef4444' if val > 0 else 'color: #22c55e' if val < 0 else ''
                     return ''
-                cols_to_show = [c for c in ['代碼', '進場', '出場', '進場價', '出場價', '報酬率', '天數', 'MAE', 'MFE'] if c in td.columns]
+
+                all_cols = ['代碼', '產業', '進場', '出場', '進場價', '出場價', '報酬率', '天數', '獲利天數',
+                            'MAE', 'GMFE', 'BMFE', '交易MDD', '配置比重', '進場量(股)', '進場額(萬)']
+                cols_to_show = [c for c in all_cols if c in td.columns]
+
+                fmt = {'報酬率': '{:.2%}', 'MAE': '{:.2%}', 'GMFE': '{:.2%}', 'BMFE': '{:.2%}',
+                       '交易MDD': '{:.2%}', '配置比重': '{:.2%}'}
+                for pc in ['進場價', '出場價']:
+                    if pc in td.columns:
+                        fmt[pc] = '{:.2f}'
+                fmt = {k: v for k, v in fmt.items() if k in cols_to_show}
+
+                pct_cols = [c for c in ['報酬率', 'MAE', 'GMFE', 'BMFE', '交易MDD'] if c in cols_to_show]
                 st.dataframe(
                     td[cols_to_show].sort_values("進場", ascending=False).head(500).style.format(
-                        {'報酬率': '{:.2%}', 'MAE': '{:.2%}', 'MFE': '{:.2%}', '進場價': '{:.2f}', '出場價': '{:.2f}'}, na_rep="N/A"
-                    ).map(hl, subset=['報酬率']),
+                        fmt, na_rep="—"
+                    ).map(hl, subset=pct_cols),
                     use_container_width=True, height=600,
                 )
             else:
