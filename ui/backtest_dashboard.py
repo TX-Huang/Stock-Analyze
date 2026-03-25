@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-from ui.components import custom_metric
+from ui.components import cyber_kpi_strip, cyber_header, cyber_alert
 
 
 def _build_yearly_table(equity, trades):
@@ -117,25 +117,31 @@ def render_backtest_dashboard(report, strategy_name="custom"):
     exposure = stats.get('exposure', (equity != equity.shift(1)).mean() if equity is not None else 0)
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 實戰戰情室",
-        "📈 資金曲線",
-        "📅 逐年績效",
-        "🔄 持倉異動",
-        "📋 交易明細",
+        "實戰戰情室",
+        "資金曲線",
+        "逐年績效",
+        "持倉異動",
+        "交易明細",
     ])
 
     with tab1:
-        st.markdown("### 🏆 核心五大戰略指標")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("🛡️ MDD", f"{mdd*100:.1f}%", "心理極限")
-        c2.metric("⚖️ 勝率/風報", f"{win_rate*100:.0f}% | {risk_reward:.1f}", "獲利引擎")
-        c3.metric("📈 CAGR", f"{cagr*100:.1f}%", "複利速度")
-        c4.metric("⏳ 持倉 (贏/輸)", f"{avg_hold_win:.0f}/{avg_hold_loss:.0f}天", "資金效率")
-        c5.metric("🛡️ 曝險", f"{exposure*100:.0f}%", "避險能力")
+        cyber_header("核心五大戰略指標", subtitle=strategy_name)
+        cyber_kpi_strip([
+            {'label': 'MDD', 'value': f"{mdd*100:.1f}%",
+             'color': '#ef4444' if mdd < -0.2 else '#f59e0b', 'accent': '#ef4444'},
+            {'label': '勝率/風報', 'value': f"{win_rate*100:.0f}% | {risk_reward:.1f}",
+             'accent': '#00f0ff'},
+            {'label': 'CAGR', 'value': f"{cagr*100:.1f}%",
+             'color': '#22c55e' if cagr > 0 else '#ef4444', 'accent': '#22c55e'},
+            {'label': '持倉 (贏/輸)', 'value': f"{avg_hold_win:.0f}/{avg_hold_loss:.0f}天",
+             'accent': '#8b5cf6'},
+            {'label': '曝險', 'value': f"{exposure*100:.0f}%",
+             'accent': '#00f0ff'},
+        ])
 
         # 現倉追蹤 (從 position 最後一天取得)
         if position is not None and len(position) > 0:
-            st.markdown("### 📌 目前持倉")
+            cyber_header("目前持倉")
             last_row = position.iloc[-1]
             current = last_row[last_row > 0].sort_values(ascending=False)
             if len(current) > 0:
@@ -159,7 +165,7 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                     })
                 st.dataframe(pd.DataFrame(holding_rows), use_container_width=True, hide_index=True)
             else:
-                st.info("目前無持倉")
+                cyber_alert("空手狀態", "目前無持倉 — 策略處於觀望中", level="info")
 
     with tab2:
         if equity is not None:
@@ -185,9 +191,22 @@ def render_backtest_dashboard(report, strategy_name="custom"):
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        st.subheader("📅 逐年績效總覽")
+        cyber_header("逐年績效總覽")
         yearly_df = _build_yearly_table(equity, trades)
         if not yearly_df.empty:
+            # 年報酬柱狀圖 (Primary — 5 秒掛接)
+            fig_yr = go.Figure()
+            colors = ['#22c55e' if v >= 0 else '#ef4444' for v in yearly_df['年報酬%']]
+            fig_yr.add_trace(go.Bar(
+                x=yearly_df['年度'], y=yearly_df['年報酬%'],
+                marker_color=colors, text=[f"{v:.1f}%" for v in yearly_df['年報酬%']],
+                textposition='outside',
+            ))
+            fig_yr.update_layout(title="逐年報酬率", height=350, margin=dict(l=10, r=10, t=40, b=10),
+                                yaxis_title="報酬率 %")
+            st.plotly_chart(fig_yr, use_container_width=True)
+
+            # 逐年績效表格 (Secondary — 精確數字)
             def _color_ret(val):
                 if pd.isna(val):
                     return ''
@@ -207,25 +226,13 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                 }, na_rep="—").map(_color_ret, subset=['年報酬%', '年MDD%']),
                 use_container_width=True,
                 hide_index=True,
-                height=700,
+                height=400,
             )
-
-            # 年報酬柱狀圖
-            fig_yr = go.Figure()
-            colors = ['#22c55e' if v >= 0 else '#ef4444' for v in yearly_df['年報酬%']]
-            fig_yr.add_trace(go.Bar(
-                x=yearly_df['年度'], y=yearly_df['年報酬%'],
-                marker_color=colors, text=[f"{v:.1f}%" for v in yearly_df['年報酬%']],
-                textposition='outside',
-            ))
-            fig_yr.update_layout(title="逐年報酬率", height=350, margin=dict(l=10, r=10, t=40, b=10),
-                                yaxis_title="報酬率 %")
-            st.plotly_chart(fig_yr, use_container_width=True)
         else:
-            st.info("無法計算逐年績效（缺少 equity curve）")
+            cyber_alert("缺少資料", "缺少 equity curve — 請先執行回測", level="warn")
 
     with tab4:
-        st.subheader("🔄 持倉異動紀錄")
+        cyber_header("持倉異動紀錄")
         changes_df = _build_position_changes(position)
         if not changes_df.empty:
             # 篩選年份
@@ -252,10 +259,10 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                 height=600,
             )
         else:
-            st.info("無持倉異動紀錄")
+            cyber_alert("無異動", "此策略尚無持倉異動紀錄", level="info")
 
     with tab5:
-        st.subheader("📋 詳細交易紀錄")
+        cyber_header("詳細交易紀錄")
         if not trades.empty:
             rename_map = {
                 "stock_id": "股票代碼",
@@ -292,11 +299,12 @@ def render_backtest_dashboard(report, strategy_name="custom"):
 
             trades_filtered = trades_display
 
-            csv = trades_filtered.to_csv(index=False).encode('utf-8-sig')
+            # 下載 + 分頁控制
+            csv_all = trades_filtered.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📥 下載完整交易明細 (.csv)",
-                data=csv,
-                file_name=f'trade_log_{datetime.now().strftime("%Y%m%d")}.csv',
+                label="下載完整交易明細 (.csv)",
+                data=csv_all,
+                file_name=f'trade_log_{strategy_name}_{datetime.now().strftime("%Y%m%d")}.csv',
                 mime='text/csv',
             )
 
@@ -304,32 +312,23 @@ def render_backtest_dashboard(report, strategy_name="custom"):
             total_items = len(trades_filtered)
             total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
 
-            page = st.number_input("頁數 (Page)", min_value=1, max_value=total_pages, value=1)
+            page = st.number_input("頁數", min_value=1, max_value=total_pages, value=1)
             start_idx = (page - 1) * items_per_page
             end_idx = min(start_idx + items_per_page, total_items)
 
-            st.info(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
+            st.caption(f"顯示第 {start_idx + 1} 至 {end_idx} 筆交易 (共 {total_items} 筆)")
 
             available_cols = ['股票代碼', '進場日期', '出場日期', '進場價', '出場價', '報酬率', '持有天數', '最大不利(MAE)', '最大有利(MFE)']
             cols_to_show = [c for c in available_cols if c in trades_filtered.columns]
 
             trades_final = trades_filtered[cols_to_show].sort_values("進場日期", ascending=False).iloc[start_idx:end_idx]
 
-            csv = trades_final.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 下載交易明細 (.csv)",
-                data=csv,
-                file_name=f'trade_log_{strategy_name}_{datetime.now().strftime("%Y%m%d")}.csv',
-                mime='text/csv',
-            )
-
             def highlight_ret(val):
-                color = ''
                 if pd.isna(val):
                     return ''
                 if isinstance(val, (int, float)):
-                    color = 'color: #ef4444' if val > 0 else 'color: #22c55e'
-                return color
+                    return 'color: #ef4444' if val > 0 else 'color: #22c55e'
+                return ''
 
             st.dataframe(
                 trades_final.style.format({
@@ -343,4 +342,4 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                 height=600
             )
         else:
-            st.info("無交易紀錄")
+            cyber_alert("無交易", "無交易紀錄 — 策略可能無觸發信號", level="info")
