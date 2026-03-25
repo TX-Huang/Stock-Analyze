@@ -349,13 +349,13 @@ def render_cost_over_time(cost_result):
         xaxis=dict(title='交易序號 (Trade #)'),
         yaxis=dict(
             title='累計成本 (NTD)',
-            titlefont=dict(color='#EF553B'),
+            title_font=dict(color='#EF553B'),
             tickfont=dict(color='#EF553B'),
             side='left',
         ),
         yaxis2=dict(
             title='累計成本拖累 (%)',
-            titlefont=dict(color='#FFA15A'),
+            title_font=dict(color='#FFA15A'),
             tickfont=dict(color='#FFA15A'),
             overlaying='y',
             side='right',
