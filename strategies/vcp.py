@@ -5,8 +5,54 @@ pd.set_option("future.no_silent_downcasting", True)
 import numpy as np
 import finlab
 
-def run_vcp_strategy(api_token):
+
+# ==========================================
+# PARAM_SCHEMA — UI 動態表單定義
+# ==========================================
+
+PARAM_SCHEMA = {
+    'trail_stop': {
+        'label': '追蹤停損',
+        'type': 'float',
+        'min': 0.05,
+        'max': 0.30,
+        'default': 0.15,
+        'step': 0.01,
+        'help': '跌破最高點多少比例時自動賣出',
+    },
+    'breakout_vol_mult': {
+        'label': '突破量能倍率',
+        'type': 'float',
+        'min': 1.0,
+        'max': 3.0,
+        'default': 1.5,
+        'step': 0.1,
+        'help': '突破日成交量須達 20 日均量的幾倍',
+    },
+    'liquidity_threshold': {
+        'label': '流動性門檻 (股)',
+        'type': 'int',
+        'min': 100000,
+        'max': 2000000,
+        'default': 500000,
+        'help': '最低日均成交量',
+    },
+}
+
+
+def run_vcp_strategy(api_token, params=None):
     from data.provider import sanitize_dataframe
+
+    # Parse params with defaults
+    p = {
+        'trail_stop': 0.15,
+        'breakout_vol_mult': 1.5,
+        'liquidity_threshold': 500000,
+        'start_date': None,
+        'end_date': None,
+    }
+    if params:
+        p.update(params)
 
     if api_token:
         finlab.login(api_token)
@@ -120,13 +166,19 @@ def run_vcp_strategy(api_token):
     position[exit_signal] = 0
     position = position.ffill().fillna(0)
 
+    # Date range slicing
+    if p.get('start_date'):
+        position = position.loc[p['start_date']:]
+    if p.get('end_date'):
+        position = position.loc[:p['end_date']]
+
     import logging
     import os
     from data.provider import safe_finlab_sim
     logging.basicConfig(filename="finlab_debug.log", level=logging.INFO, format='%(asctime)s - %(message)s')
     try:
         report = safe_finlab_sim(position, name='VCP V1.1 波動收縮策略', upload=False,
-                                trail_stop=0.15, position_limit=0.1)
+                                trail_stop=p['trail_stop'], position_limit=0.1)
         return report
     except Exception as e:
         logging.error(f"策略層級崩潰: {str(e)}", exc_info=True)

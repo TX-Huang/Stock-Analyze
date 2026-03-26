@@ -27,6 +27,33 @@ from strategies.regime_report import build_regime_report
 
 logger = logging.getLogger(__name__)
 
+
+# ==========================================
+# PARAM_SCHEMA — V4.x 共用 UI 動態表單定義
+# V4.0, V4.1 Razor, V4.2 Turbo 繼承此 schema
+# ==========================================
+
+PARAM_SCHEMA = {
+    'trail_stop': {
+        'label': '追蹤停損',
+        'type': 'float',
+        'min': 0.05,
+        'max': 0.30,
+        'default': 0.18,
+        'step': 0.01,
+        'help': '跌破最高點多少比例時自動賣出',
+    },
+    'transition_days': {
+        'label': 'Regime 轉換天數',
+        'type': 'int',
+        'min': 1,
+        'max': 20,
+        'default': 5,
+        'help': '市場狀態切換時的漸進過渡天數',
+    },
+}
+
+
 _CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     'data', 'cache'
@@ -119,9 +146,19 @@ def run_v4_strategy(api_token, weights_dict, strategy_name, cache_prefix, varian
     logger.info(f"Regime: {current_regime} ({current_date})")
 
     # 6. 動態組合回測
+    _transition_days = 5
+    if params and 'transition_days' in params:
+        _transition_days = params['transition_days']
     portfolio_returns = backtest_dynamic_portfolio(
-        returns_df, regime_series, regime_weights, transition_days=5
+        returns_df, regime_series, regime_weights, transition_days=_transition_days
     )
+
+    # Date range slicing (if specified via params)
+    if params:
+        if params.get('start_date'):
+            portfolio_returns = portfolio_returns.loc[params['start_date']:]
+        if params.get('end_date'):
+            portfolio_returns = portfolio_returns.loc[:params['end_date']]
 
     # 7. 組裝報告
     current_weights = regime_weights.get(current_regime, {})

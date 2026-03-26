@@ -13,7 +13,7 @@ WF Test (2021+): CAGR 30.41%, MDD -13.01%, CAGR/MDD 2.34x, Sharpe 1.785
   weak_bear   → Will VCP V2.0 100%    (Ret/MDD 4.30x) — 反彈獵場
   strong_bear → Pairs Trading 100%    (Ret/MDD 1.40x) — 空頭避險
 """
-from strategies.isaac_v4_base import run_v4_strategy, get_v4_regime_allocation
+from strategies.isaac_v4_base import run_v4_strategy, get_v4_regime_allocation, PARAM_SCHEMA
 
 STRATEGY_NAME = "Isaac V4.1 Razor 極簡配置"
 _CACHE_PREFIX = 'v4r'

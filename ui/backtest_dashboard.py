@@ -353,10 +353,14 @@ def render_backtest_dashboard(report, strategy_name="custom"):
                                    mode='lines', name='策略報酬',
                                    line=dict(color='#22c55e', width=2)), row=1, col=1)
 
-            if benchmark is not None:
-                 fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
-                                   mode='lines', name='大盤基準',
-                                   line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+            if benchmark is not None and len(benchmark) > 0:
+                bm0 = benchmark.iloc[0]
+                if pd.notna(bm0) and bm0 > 0:
+                    bm_norm = benchmark / bm0
+                    fig.add_trace(go.Scatter(x=bm_norm.index, y=bm_norm.values,
+                                       mode='lines', name='大盤基準',
+                                       line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
+            fig.update_yaxes(title_text="累積報酬 (倍)", row=1, col=1)
 
             if drawdown is not None:
                 fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values,

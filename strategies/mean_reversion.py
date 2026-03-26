@@ -13,6 +13,52 @@ logger = logging.getLogger(__name__)
 STRATEGY_NAME = "均值回歸策略"
 STRATEGY_DESCRIPTION = "RSI 超賣 + 布林帶下軌 + 偏離均線 → 反彈回歸"
 
+# ── PARAM_SCHEMA — UI 動態表單定義 ──
+PARAM_SCHEMA = {
+    'rsi_oversold': {
+        'label': 'RSI 超賣門檻',
+        'type': 'int',
+        'min': 15,
+        'max': 45,
+        'default': 30,
+        'help': 'RSI 低於此值觸發超賣信號',
+    },
+    'bb_std': {
+        'label': '布林帶標準差',
+        'type': 'float',
+        'min': 1.0,
+        'max': 3.0,
+        'default': 2.0,
+        'step': 0.1,
+        'help': '布林帶寬度 (幾個標準差)',
+    },
+    'deviation_threshold': {
+        'label': '均線偏離門檻',
+        'type': 'float',
+        'min': -0.20,
+        'max': -0.02,
+        'default': -0.08,
+        'step': 0.01,
+        'help': '價格偏離均線的比例門檻 (負數)',
+    },
+    'stop_loss': {
+        'label': '固定停損',
+        'type': 'float',
+        'min': 0.03,
+        'max': 0.20,
+        'default': 0.08,
+        'step': 0.01,
+        'help': '虧損超過此比例自動賣出',
+    },
+    'mode': {
+        'label': '策略模式',
+        'type': 'select',
+        'options': ['classic', 'connors', 'momentum_pullback'],
+        'default': 'classic',
+        'help': 'classic=經典反彈, connors=RSI2短線, momentum_pullback=動能回調',
+    },
+}
+
 
 def run_mean_reversion_strategy(api_token, params=None):
     """

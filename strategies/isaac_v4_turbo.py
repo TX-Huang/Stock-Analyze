@@ -15,7 +15,7 @@ WF Test (2021+): CAGR 45.72%, MDD -24.68%, CAGR/MDD 1.85x, Sharpe 1.609
 
 空頭防守是「免費午餐」: 移除後 CAGR 反而下降 0.5%, MDD 增加 0.5%。
 """
-from strategies.isaac_v4_base import run_v4_strategy, get_v4_regime_allocation
+from strategies.isaac_v4_base import run_v4_strategy, get_v4_regime_allocation, PARAM_SCHEMA
 
 STRATEGY_NAME = "Isaac V4.2 Turbo 最大報酬"
 _CACHE_PREFIX = 'v4t'

@@ -13,6 +13,45 @@ logger = logging.getLogger(__name__)
 STRATEGY_NAME = "配對輪動策略"
 STRATEGY_DESCRIPTION = "同產業高相關配對 → Z-score 偏離 → 買入弱勢方等待回歸"
 
+# ── PARAM_SCHEMA — UI 動態表單定義 ──
+PARAM_SCHEMA = {
+    'zscore_entry': {
+        'label': 'Z-score 進場門檻',
+        'type': 'float',
+        'min': -3.0,
+        'max': -0.5,
+        'default': -1.0,
+        'step': 0.1,
+        'help': 'Z-score 低於此值時買入弱勢方',
+    },
+    'zscore_exit': {
+        'label': 'Z-score 出場門檻',
+        'type': 'float',
+        'min': 0.0,
+        'max': 2.0,
+        'default': 0.5,
+        'step': 0.1,
+        'help': 'Z-score 回升至此值時出場',
+    },
+    'lookback': {
+        'label': '回溯期 (天)',
+        'type': 'int',
+        'min': 10,
+        'max': 60,
+        'default': 30,
+        'help': '計算 Z-score 的回溯天數',
+    },
+    'stop_loss': {
+        'label': '固定停損',
+        'type': 'float',
+        'min': 0.05,
+        'max': 0.20,
+        'default': 0.10,
+        'step': 0.01,
+        'help': '虧損超過此比例自動賣出',
+    },
+}
+
 
 def run_pairs_trading_strategy(api_token, params=None):
     """

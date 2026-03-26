@@ -15,6 +15,44 @@ logger = logging.getLogger(__name__)
 # 整合日期: 2026-03-24
 # ==========================================
 
+# ── PARAM_SCHEMA — UI 動態表單定義 ──
+PARAM_SCHEMA = {
+    'trail_stop': {
+        'label': '追蹤停損',
+        'type': 'float',
+        'min': 0.10,
+        'max': 0.40,
+        'default': 0.25,
+        'step': 0.01,
+        'help': '跌破最高點多少比例時自動賣出',
+    },
+    'volume_multiplier': {
+        'label': '突破量能倍率',
+        'type': 'float',
+        'min': 1.0,
+        'max': 4.0,
+        'default': 2.0,
+        'step': 0.1,
+        'help': '突破日成交量須達均量的幾倍',
+    },
+    'max_positions': {
+        'label': '最大持股數',
+        'type': 'int',
+        'min': 5,
+        'max': 20,
+        'default': 10,
+        'help': '同時持有的最大股票數',
+    },
+    'weekly_ma_fast': {
+        'label': '週線快速均線',
+        'type': 'int',
+        'min': 10,
+        'max': 50,
+        'default': 30,
+        'help': '週線快速移動平均線天數',
+    },
+}
+
 
 def run_will_vcp_strategy(api_token, params=None):
     """

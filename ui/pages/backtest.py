@@ -6,12 +6,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import numpy as np
 import time
 import os
+import json
 import logging
+from datetime import datetime, date
 
 from ui.theme import _plotly_dark_layout
 from ui.components import cyber_spinner, cyber_kpi_strip, cyber_table
+from analysis.simulator import simulate_lumpsum, simulate_dca, yearly_pnl, summary_stats, validate_settings
 
 
 def render(_embedded=False):
@@ -33,6 +37,10 @@ def render(_embedded=False):
         "Isaac V4.0 Regime 動態配置": ("strategies.isaac_v4", "run_strategy"),
         "Isaac V4.1 Razor 極簡配置": ("strategies.isaac_v4_razor", "run_strategy"),
         "Isaac V4.2 Turbo 最大報酬": ("strategies.isaac_v4_turbo", "run_strategy"),
+        "均值回歸策略": ("strategies.mean_reversion", "run_mean_reversion_strategy"),
+        "價值股息策略": ("strategies.value_dividend", "run_value_dividend_strategy"),
+        "配對輪動策略": ("strategies.pairs_trading", "run_pairs_trading_strategy"),
+        "Will VCP 突破策略": ("strategies.will_vcp", "run_will_vcp_strategy"),
     }
 
     # 從 session_state 取得 finlab_token（由 app.py 從 secrets.toml 載入）
@@ -41,6 +49,44 @@ def render(_embedded=False):
     with st.expander("策略設定", expanded=True):
         all_options = list(PRESET_STRATEGIES.keys()) + ["📂 上傳自訂策略"]
         strategy_type = st.selectbox("選擇策略", all_options)
+
+        # ── 投資設定 ──
+        # Read preset defaults (if a preset was just loaded)
+        _pa = st.session_state.pop('_preset_applied', None)
+        _def_capital = _pa['capital'] if _pa else 2_000_000
+        _def_mode_idx = 1 if (_pa and _pa.get('mode') == 'dca') else 0
+        _def_dca = _pa['dca_monthly'] if _pa else 50_000
+        _def_start = date.fromisoformat(_pa['start_date']) if (_pa and _pa.get('start_date')) else date(2015, 1, 1)
+        _def_end = date.fromisoformat(_pa['end_date']) if (_pa and _pa.get('end_date')) else date.today()
+
+        st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:12px 0 4px; font-weight:600;">── 投資設定 ──</div>', unsafe_allow_html=True)
+        capital = st.slider("投資金額 (NT$)", min_value=100_000, max_value=50_000_000,
+                           value=_def_capital, step=100_000, format="NT$ %d",
+                           help="投入的初始資金")
+
+        invest_mode = st.radio("投入模式", ["一次投入", "定期定額 (DCA)"],
+                               index=_def_mode_idx, horizontal=True)
+        dca_monthly = 0
+        if invest_mode == "定期定額 (DCA)":
+            dca_monthly = st.slider("每月投入 (NT$)", min_value=5_000, max_value=500_000,
+                                    value=_def_dca, step=5_000, format="NT$ %d")
+
+        date_c1, date_c2 = st.columns(2)
+        with date_c1:
+            sim_start_date = st.date_input("起始日期", value=_def_start,
+                                           min_value=date(2000, 1, 1))
+        with date_c2:
+            sim_end_date = st.date_input("結束日期", value=_def_end,
+                                         max_value=date.today())
+
+        # ── 策略參數 (動態 PARAM_SCHEMA) ──
+        strategy_params = {}
+        if strategy_type != "📂 上傳自訂策略" and strategy_type in PRESET_STRATEGIES:
+            strategy_params = _render_param_schema(strategy_type, PRESET_STRATEGIES)
+
+        # ── Preset 儲存/載入 ──
+        _render_preset_ui(strategy_type, capital, invest_mode, dca_monthly,
+                         sim_start_date, sim_end_date, strategy_params)
 
         # Custom strategy upload
         uploaded_file = None
@@ -149,7 +195,15 @@ def render(_embedded=False):
 
     # --- Execute Backtest ---
     if run_btn:
-        if not finlab_token:
+        # Validate settings
+        is_valid, err_msg = validate_settings(
+            capital, sim_start_date, sim_end_date,
+            'dca' if invest_mode == "定期定額 (DCA)" else 'lumpsum',
+            dca_monthly
+        )
+        if not is_valid:
+            st.warning(err_msg)
+        elif not finlab_token:
             st.error("請輸入 Finlab API Token")
         elif strategy_type == "📂 上傳自訂策略" and uploaded_file is None:
             st.error("請上傳策略檔案")
@@ -196,7 +250,22 @@ def render(_embedded=False):
                         mod_path, func_name = PRESET_STRATEGIES[strategy_type]
                         strat = importlib.import_module(mod_path)
                         importlib.reload(strat)
-                        report = getattr(strat, func_name)(finlab_token)
+                        # Build params dict with user settings
+                        run_params = dict(strategy_params) if strategy_params else {}
+                        run_params['start_date'] = str(sim_start_date)
+                        run_params['end_date'] = str(sim_end_date)
+                        func = getattr(strat, func_name)
+                        import inspect
+                        sig = inspect.signature(func)
+                        if 'sim_start' in sig.parameters:
+                            # Isaac V3.9 style — uses sim_start/sim_end for date slicing
+                            report = func(finlab_token, params=run_params,
+                                         sim_start=str(sim_start_date),
+                                         sim_end=str(sim_end_date))
+                        elif 'params' in sig.parameters:
+                            report = func(finlab_token, params=run_params)
+                        else:
+                            report = func(finlab_token)
 
                     equity = getattr(report, 'creturn', None)
                     benchmark = getattr(report, 'benchmark', None)
@@ -205,6 +274,14 @@ def render(_embedded=False):
 
                     st.session_state.backtest_report = report
                     st.session_state.current_strategy = strategy_type
+                    st.session_state.sim_settings = {
+                        'capital': capital,
+                        'mode': invest_mode,
+                        'dca_monthly': dca_monthly,
+                        'start_date': str(sim_start_date),
+                        'end_date': str(sim_end_date),
+                        'params': strategy_params,
+                    }
 
                     st.session_state.backtest_results[run_label] = {
                         'strategy_type': strategy_type,
@@ -241,9 +318,13 @@ def render(_embedded=False):
         has_comparison = len(st.session_state.backtest_results) >= 2
 
         if has_comparison:
-            tab1, tab_cmp, tab2, tab3, tab_cost, tab_log, tab_mc = st.tabs(["📊 核心績效", "⚔️ 策略比較", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "📓 回測日誌", "🎲 統計驗證"])
+            tab_ntd, tab1, tab_cmp, tab2, tab3, tab_cost, tab_log, tab_mc = st.tabs(["💰 NT$ 模擬", "📊 核心績效", "⚔️ 策略比較", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "📓 回測日誌", "🎲 統計驗證"])
         else:
-            tab1, tab2, tab3, tab_cost, tab_log, tab_mc = st.tabs(["📊 核心績效", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "📓 回測日誌", "🎲 統計驗證"])
+            tab_ntd, tab1, tab2, tab3, tab_cost, tab_log, tab_mc = st.tabs(["💰 NT$ 模擬", "📊 核心績效", "🛡️ 壓力測試", "📋 交易明細", "💰 交易成本", "📓 回測日誌", "🎲 統計驗證"])
+
+        # ------ TAB: NT$ Simulation ------
+        with tab_ntd:
+            _render_ntd_results(report, equity, trades, stats)
 
         # ------ TAB: Core Performance ------
         with tab1:
@@ -270,8 +351,12 @@ def render(_embedded=False):
             if equity is not None:
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
                 fig.add_trace(go.Scatter(x=equity.index, y=equity.values, mode='lines', name='策略', line=dict(color='#3b82f6', width=2)), row=1, col=1)
-                if benchmark is not None:
-                    fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values, mode='lines', name='大盤', line=dict(color='#64748b', width=1, dash='dot')), row=1, col=1)
+                if benchmark is not None and len(benchmark) > 0:
+                    bm0 = benchmark.iloc[0]
+                    if pd.notna(bm0) and bm0 > 0:
+                        bm_norm = benchmark / bm0
+                        fig.add_trace(go.Scatter(x=bm_norm.index, y=bm_norm.values, mode='lines', name='大盤', line=dict(color='#64748b', width=1, dash='dot')), row=1, col=1)
+                fig.update_yaxes(title_text="累積報酬 (倍)", row=1, col=1)
                 if drawdown is not None:
                     fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown.values, mode='lines', name='回撤', line=dict(color='#ef4444', width=1), fill='tozeroy', fillcolor='rgba(239,68,68,0.15)'), row=2, col=1)
                 _plotly_dark_layout(fig, height=550, title_text=f'{st.session_state.current_strategy} 權益曲線')
@@ -343,14 +428,17 @@ def render(_embedded=False):
 
                 for label, data in results_dict.items():
                     bm = data.get('benchmark')
-                    if bm is not None:
-                        fig_cmp.add_trace(go.Scatter(
-                            x=bm.index, y=bm.values, mode='lines', name='大盤',
-                            line=dict(color='#475569', width=1, dash='dash'),
-                        ), row=1, col=1)
+                    if bm is not None and len(bm) > 0:
+                        bm0 = bm.iloc[0]
+                        if pd.notna(bm0) and bm0 > 0:
+                            bm_norm = bm / bm0
+                            fig_cmp.add_trace(go.Scatter(
+                                x=bm_norm.index, y=bm_norm.values, mode='lines', name='大盤',
+                                line=dict(color='#475569', width=1, dash='dash'),
+                            ), row=1, col=1)
                         break
 
-                fig_cmp.update_yaxes(title_text="累積報酬", row=1, col=1)
+                fig_cmp.update_yaxes(title_text="累積報酬 (倍)", row=1, col=1)
                 fig_cmp.update_yaxes(title_text="回撤", row=2, col=1)
                 _plotly_dark_layout(fig_cmp, height=600, title_text='策略比較')
                 st.plotly_chart(fig_cmp, use_container_width=True)
@@ -669,8 +757,303 @@ def render(_embedded=False):
             <div style="font-size:3rem; margin-bottom:12px;">🧬</div>
             <div style="font-size:1.1rem; font-weight:600; color:#64748b; margin-bottom:8px;">選擇策略並按下「執行回測」開始</div>
             <div style="font-size:0.8rem; color:#334155;">
-                支援 4 種內建策略 + 自訂 .py 上傳<br>
-                可執行多次回測，在「策略比較」分頁進行 A/B 對照
+                支援內建策略 + 自訂 .py 上傳<br>
+                設定投資金額與日期範圍，模擬個人化投資成果
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+
+# ==========================================
+# Helper Functions — Settings Form
+# ==========================================
+
+def _render_param_schema(strategy_type, preset_strategies):
+    """動態渲染策略參數表單，根據 PARAM_SCHEMA。"""
+    import importlib
+    mod_path, _ = preset_strategies[strategy_type]
+    try:
+        strat_mod = importlib.import_module(mod_path)
+        schema = getattr(strat_mod, 'PARAM_SCHEMA', None)
+    except Exception:
+        schema = None
+
+    if not schema:
+        st.info("此策略不支援參數調整")
+        return {}
+
+    st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:12px 0 4px; font-weight:600;">── 策略參數 ──</div>', unsafe_allow_html=True)
+
+    params = {}
+    for key, spec in schema.items():
+        param_type = spec.get('type', 'float')
+        label = spec.get('label', key)
+        help_text = spec.get('help', '')
+        default = spec.get('default')
+
+        if param_type == 'float':
+            params[key] = st.slider(
+                label, min_value=spec.get('min', 0.0), max_value=spec.get('max', 1.0),
+                value=default, step=spec.get('step', 0.01), help=help_text,
+                key=f"param_{key}"
+            )
+        elif param_type == 'int':
+            params[key] = st.slider(
+                label, min_value=spec.get('min', 0), max_value=spec.get('max', 100),
+                value=default, step=1, help=help_text,
+                key=f"param_{key}"
+            )
+        elif param_type == 'bool':
+            params[key] = st.checkbox(label, value=default, help=help_text,
+                                      key=f"param_{key}")
+        elif param_type == 'select':
+            options = spec.get('options', [])
+            idx = options.index(default) if default in options else 0
+            params[key] = st.selectbox(label, options, index=idx, help=help_text,
+                                       key=f"param_{key}")
+
+    return params
+
+
+def _render_preset_ui(strategy_type, capital, invest_mode, dca_monthly,
+                      start_date, end_date, strategy_params):
+    """渲染 Preset 儲存/載入 UI。"""
+    presets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                               'data', 'presets')
+    os.makedirs(presets_dir, exist_ok=True)
+
+    st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:12px 0 4px; font-weight:600;">── 設定檔 ──</div>', unsafe_allow_html=True)
+
+    # Load existing presets for this strategy
+    preset_files = []
+    try:
+        for f in os.listdir(presets_dir):
+            if f.endswith('.json'):
+                fpath = os.path.join(presets_dir, f)
+                with open(fpath, 'r', encoding='utf-8') as fp:
+                    pdata = json.load(fp)
+                    if pdata.get('strategy') == strategy_type:
+                        preset_files.append((pdata.get('name', f), f, pdata))
+    except Exception:
+        pass
+
+    load_c, name_c, save_c = st.columns([2, 2, 1])
+
+    with load_c:
+        if preset_files:
+            preset_names = ["(不載入)"] + [p[0] for p in preset_files]
+            selected = st.selectbox("載入設定檔", preset_names, key="preset_load")
+            if selected != "(不載入)":
+                for pname, fname, pdata in preset_files:
+                    if pname == selected:
+                        _apply_preset(pdata)
+                        break
+        else:
+            st.selectbox("載入設定檔", ["尚無設定檔"], disabled=True, key="preset_load")
+
+    with name_c:
+        preset_name = st.text_input("設定檔名稱", value="", placeholder="例: 我的長期測試",
+                                    key="preset_name")
+    with save_c:
+        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        if st.button("💾 儲存", key="preset_save", use_container_width=True):
+            if not preset_name:
+                st.toast("⚠️ 請輸入設定檔名稱", icon="⚠️")
+            else:
+                _save_preset(presets_dir, preset_name, strategy_type,
+                            capital, invest_mode, dca_monthly,
+                            start_date, end_date, strategy_params)
+                st.toast(f"✅ 已儲存設定檔「{preset_name}」", icon="✅")
+
+
+def _save_preset(presets_dir, name, strategy, capital, mode, dca_monthly,
+                 start_date, end_date, params):
+    """儲存 preset JSON 檔案。"""
+    preset = {
+        "name": name,
+        "strategy": strategy,
+        "created_at": datetime.now().isoformat(),
+        "settings": {
+            "capital": capital,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "mode": "dca" if mode == "定期定額 (DCA)" else "lumpsum",
+            "dca_monthly": dca_monthly,
+        },
+        "params": params,
+    }
+    # Sanitize filename
+    safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
+    fpath = os.path.join(presets_dir, f"{safe_name}.json")
+    with open(fpath, 'w', encoding='utf-8') as f:
+        json.dump(preset, f, ensure_ascii=False, indent=2)
+
+
+def _apply_preset(pdata):
+    """套用 preset 到 session_state（用於下次 rerun 回填）。"""
+    settings = pdata.get('settings', {})
+    st.session_state['_preset_applied'] = {
+        'capital': settings.get('capital', 2_000_000),
+        'mode': settings.get('mode', 'lumpsum'),
+        'dca_monthly': settings.get('dca_monthly', 0),
+        'start_date': settings.get('start_date'),
+        'end_date': settings.get('end_date'),
+        'params': pdata.get('params', {}),
+    }
+    st.toast(f"✅ 已載入設定檔「{pdata.get('name', '')}」", icon="✅")
+
+
+# ==========================================
+# Helper Functions — NT$ Results Display
+# ==========================================
+
+def _render_ntd_results(report, equity, trades, stats):
+    """渲染 NT$ 個人化投資模擬結果。"""
+    sim = st.session_state.get('sim_settings')
+    if not sim:
+        st.info("請先執行回測以查看 NT$ 模擬結果")
+        return
+
+    cap = sim['capital']
+    mode = sim['mode']
+    dca_monthly = sim.get('dca_monthly', 0)
+
+    if equity is None or equity.empty:
+        st.info("📊 此期間策略未產生交易。試試擴大日期範圍？")
+        return
+
+    # Calculate NT$ equity
+    if mode == "定期定額 (DCA)" and dca_monthly > 0:
+        # Check if period is >= 1 month
+        if equity is not None and len(equity) > 0:
+            days_span = (equity.index[-1] - equity.index[0]).days
+            if days_span < 30:
+                st.info("📋 期間不足 1 個月，退化為一次投入模式")
+                ntd_equity = simulate_lumpsum(equity, cap)
+                dca_result = None
+            else:
+                dca_result = simulate_dca(equity, dca_monthly)
+                ntd_equity = dca_result['equity']
+        else:
+            ntd_equity = simulate_lumpsum(equity, cap)
+            dca_result = None
+    else:
+        ntd_equity = simulate_lumpsum(equity, cap)
+        dca_result = None
+
+    # Summary stats
+    ss = summary_stats(ntd_equity, cap if not dca_result else 0)
+    final_val = ss['final_value']
+    total_pnl = ss['total_pnl']
+
+    if dca_result:
+        invested_total = dca_result['invested'].iloc[-1] if len(dca_result['invested']) > 0 else 0
+        total_pnl = final_val - invested_total
+        total_pct = (total_pnl / invested_total * 100) if invested_total > 0 else 0
+    else:
+        invested_total = cap
+        total_pct = ss['total_return_pct']
+
+    # NT$ KPI Strip
+    pnl_color = "#ef4444" if total_pnl >= 0 else "#22c55e"
+    pnl_arrow = "↑" if total_pnl >= 0 else "↓"
+
+    cagr_val = stats.get('cagr', 0)
+    mdd_val = stats.get('max_drawdown', 0)
+    sharpe_val = stats.get('daily_sharpe', 0)
+
+    st.markdown(f"""
+    <div class="kpi-strip">
+        <div class="kpi-item" style="border-left:3px solid {pnl_color}; flex:1.5">
+            <div class="kpi-label">最終市值</div>
+            <div class="kpi-value" style="color:{pnl_color}; font-size:1.4rem">NT$ {final_val:,.0f}</div>
+        </div>
+        <div class="kpi-item" style="border-left:3px solid {pnl_color}">
+            <div class="kpi-label">總損益 {pnl_arrow}</div>
+            <div class="kpi-value" style="color:{pnl_color}">NT$ {total_pnl:+,.0f}</div>
+            <div style="font-size:0.7rem; color:#64748b">{total_pct:+.1f}%</div>
+        </div>
+        <div class="kpi-item" style="border-left:3px solid #3b82f6">
+            <div class="kpi-label">年化報酬</div>
+            <div class="kpi-value" style="color:#3b82f6">{cagr_val*100:.1f}%</div>
+        </div>
+        <div class="kpi-item" style="border-left:3px solid #ef4444">
+            <div class="kpi-label">MDD</div>
+            <div class="kpi-value" style="color:#ef4444">{mdd_val*100:.1f}%</div>
+        </div>
+        <div class="kpi-item">
+            <div class="kpi-label">Sharpe</div>
+            <div class="kpi-value">{sharpe_val:.2f}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if dca_result:
+        st.markdown(f"""
+        <div style="padding:8px 12px; background:#1e293b; border-radius:6px; margin:8px 0; font-size:0.8rem; color:#94a3b8;">
+            📊 定期定額模式 — 每月投入 NT$ {dca_monthly:,}，累計投入 NT$ {invested_total:,.0f}
+            {'| IRR: ' + f'{dca_result["irr"]*100:.1f}%' if dca_result.get("irr") else ''}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # NT$ Equity Curve
+    if ntd_equity is not None and len(ntd_equity) > 0:
+        fig = go.Figure()
+
+        if dca_result and dca_result['invested'] is not None:
+            # DCA: dual lines
+            invested_line = dca_result['invested']
+            fig.add_trace(go.Scatter(
+                x=invested_line.index, y=invested_line.values,
+                mode='lines', name='投入本金累計',
+                line=dict(color='#64748b', width=1.5, dash='dot')
+            ))
+            fig.add_trace(go.Scatter(
+                x=ntd_equity.index, y=ntd_equity.values,
+                mode='lines', name='總市值',
+                line=dict(color='#00f0ff', width=2),
+                fill='tonexty',
+                fillcolor='rgba(0,240,255,0.08)'
+            ))
+        else:
+            # Lumpsum: single line + capital baseline
+            fig.add_trace(go.Scatter(
+                x=ntd_equity.index, y=[cap] * len(ntd_equity),
+                mode='lines', name='初始本金',
+                line=dict(color='#64748b', width=1, dash='dot')
+            ))
+            fig.add_trace(go.Scatter(
+                x=ntd_equity.index, y=ntd_equity.values,
+                mode='lines', name='策略淨值',
+                line=dict(color='#00f0ff', width=2),
+                fill='tonexty',
+                fillcolor='rgba(0,240,255,0.08)'
+            ))
+
+        _plotly_dark_layout(fig, height=420, title_text='NT$ 淨值曲線')
+        fig.update_yaxes(title_text="NT$", tickformat=",")
+        fig.update_layout(
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Yearly PnL Table
+    if ntd_equity is not None and len(ntd_equity) > 0:
+        ypnl = yearly_pnl(ntd_equity, capital=invested_total if dca_result else cap)
+        if not ypnl.empty:
+            st.markdown('<p class="sec-header">逐年損益表</p>', unsafe_allow_html=True)
+
+            # Format for display
+            display_df = ypnl.copy()
+            display_df.columns = ['年份', '年初市值', '年末市值', '損益 NT$', '報酬率 %']
+            display_df['年初市值'] = display_df['年初市值'].apply(lambda x: f"NT$ {x:,.0f}")
+            display_df['年末市值'] = display_df['年末市值'].apply(lambda x: f"NT$ {x:,.0f}")
+            display_df['損益 NT$'] = display_df['損益 NT$'].apply(
+                lambda x: f'<span style="color:{"#ef4444" if x >= 0 else "#22c55e"}">NT$ {x:+,.0f}</span>'
+            )
+            display_df['報酬率 %'] = display_df['報酬率 %'].apply(
+                lambda x: f'<span style="color:{"#ef4444" if x >= 0 else "#22c55e"}">{x:+.1f}%</span>'
+            )
+
+            html_table = display_df.to_html(escape=False, index=False, classes='cyber-table')
+            st.markdown(html_table, unsafe_allow_html=True)

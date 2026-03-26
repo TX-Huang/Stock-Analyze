@@ -85,7 +85,7 @@ def _estimate_trade_cost(
 
 # ─── Main Analysis ───
 
-def analyze_trading_costs(trades_df):
+def analyze_trading_costs(trades_df, capital=DEFAULT_CAPITAL_PER_TRADE):
     """
     Analyze trading costs from a DataFrame of closed trades.
 
@@ -138,7 +138,7 @@ def analyze_trading_costs(trades_df):
     has_exit = 'exit_price' in df.columns
 
     if not has_entry:
-        df['entry_price'] = DEFAULT_CAPITAL_PER_TRADE  # use 1:1 proxy
+        df['entry_price'] = capital  # use 1:1 proxy
     if not has_exit:
         if 'return' in df.columns:
             df['exit_price'] = df['entry_price'] * (1 + df['return'])
@@ -166,8 +166,9 @@ def analyze_trading_costs(trades_df):
         entry_p = float(row.get('entry_price', DEFAULT_CAPITAL_PER_TRADE))
         exit_p = float(row.get('exit_price', entry_p))
 
-        cost = _estimate_trade_cost(entry_p, exit_p)
+        cost = _estimate_trade_cost(entry_p, exit_p, capital=capital)
         cost['stock_id'] = row.get('stock_id', 'N/A')
+        cost['entry_date'] = str(row.get('entry_date', ''))
         cost['holding_days'] = float(row.get('holding_days', 0))
         cost['entry_price'] = entry_p
         cost['exit_price'] = exit_p
@@ -195,7 +196,7 @@ def analyze_trading_costs(trades_df):
     net_return = gross_return - total_cost_pct
 
     # Cost ratio (costs as % of gross profit)
-    gross_profit_ntd = gross_return * DEFAULT_CAPITAL_PER_TRADE
+    gross_profit_ntd = gross_return * capital
     cost_ratio = (total_cost / gross_profit_ntd) if gross_profit_ntd > 0 else 0.0
 
     # Annualized turnover
@@ -305,6 +306,7 @@ def render_cost_over_time(cost_result):
     # Build cumulative cost series
     cum_cost = []
     cum_cost_pct = []
+    x_values = []
     running_cost = 0.0
     running_cost_pct = 0.0
 
@@ -313,54 +315,66 @@ def render_cost_over_time(cost_result):
         running_cost_pct += t['cost_pct'] * 100  # convert to %
         cum_cost.append(running_cost)
         cum_cost_pct.append(running_cost_pct)
+        x_values.append(t.get('entry_date', ''))
 
-    trade_nums = list(range(1, len(by_trade) + 1))
+    # Use dates for x-axis if available, fallback to trade numbers
+    has_dates = x_values and x_values[0] and x_values[0] != ''
+    if has_dates:
+        try:
+            import pandas as _pd
+            x_axis = _pd.to_datetime(x_values)
+            x_title = '交易日期'
+        except Exception:
+            x_axis = list(range(1, len(by_trade) + 1))
+            x_title = '交易序號 (Trade #)'
+    else:
+        x_axis = list(range(1, len(by_trade) + 1))
+        x_title = '交易序號 (Trade #)'
 
     fig = go.Figure()
 
     # Cumulative cost NTD (left y-axis)
     fig.add_trace(go.Scatter(
-        x=trade_nums,
+        x=x_axis,
         y=cum_cost,
-        mode='lines+markers',
+        mode='lines',
         name='累計成本 (NTD)',
-        line=dict(color='#EF553B', width=2),
-        marker=dict(size=4),
+        line=dict(color='#ef4444', width=2),
         yaxis='y',
     ))
 
     # Cumulative cost % (right y-axis)
     fig.add_trace(go.Scatter(
-        x=trade_nums,
+        x=x_axis,
         y=cum_cost_pct,
-        mode='lines+markers',
+        mode='lines',
         name='累計成本拖累 (%)',
-        line=dict(color='#FFA15A', width=2, dash='dot'),
-        marker=dict(size=4),
+        line=dict(color='#f59e0b', width=2, dash='dot'),
         yaxis='y2',
     ))
 
     fig.update_layout(
         title=dict(
-            text='累計交易成本 (Cumulative Cost Drag)',
+            text='累計交易成本趨勢',
             x=0.5,
             font=dict(size=16),
         ),
-        xaxis=dict(title='交易序號 (Trade #)'),
+        xaxis=dict(title=x_title),
         yaxis=dict(
-            title=dict(text='累計成本 (NTD)', font=dict(color='#EF553B')),
-            tickfont=dict(color='#EF553B'),
+            title=dict(text='累計成本 (NTD)', font=dict(color='#ef4444')),
+            tickfont=dict(color='#ef4444'),
             side='left',
         ),
         yaxis2=dict(
-            title=dict(text='累計成本拖累 (%)', font=dict(color='#FFA15A')),
-            tickfont=dict(color='#FFA15A'),
+            title=dict(text='累計成本拖累 (%)', font=dict(color='#f59e0b')),
+            tickfont=dict(color='#f59e0b'),
             overlaying='y',
             side='right',
         ),
         hovermode='x unified',
         showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=-0.2, xanchor='center', x=0.5),
+        legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='center', x=0.5),
+        margin=dict(l=10, r=60, t=60, b=60),
     )
 
     _apply_dark_theme(fig)

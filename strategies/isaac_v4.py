@@ -13,7 +13,7 @@ WF Test (2021+): CAGR 31.21%, MDD -17.90%, CAGR/MDD 1.74x, Sharpe 1.846
   weak_bear   → Isaac 50% + VCP 50%  (Sharpe 2.004/1.994)
   strong_bear → PT 53% + VD 47%      (Sharpe 1.540/1.348)
 """
-from strategies.isaac_v4_base import run_v4_strategy, get_v4_regime_allocation
+from strategies.isaac_v4_base import run_v4_strategy, get_v4_regime_allocation, PARAM_SCHEMA
 
 STRATEGY_NAME = "Isaac V4.0 Regime 動態配置"
 _CACHE_PREFIX = 'v4'

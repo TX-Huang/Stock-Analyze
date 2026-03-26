@@ -13,6 +13,44 @@ logger = logging.getLogger(__name__)
 STRATEGY_NAME = "價值股息策略"
 STRATEGY_DESCRIPTION = "低 PE + 高殖利率 + 營收成長 + MA200 保護 → 價值型長期持有"
 
+# ── PARAM_SCHEMA — UI 動態表單定義 ──
+PARAM_SCHEMA = {
+    'pe_max': {
+        'label': 'PE 上限',
+        'type': 'int',
+        'min': 5,
+        'max': 30,
+        'default': 15,
+        'help': '本益比上限，超過此值不買入',
+    },
+    'dividend_yield_min': {
+        'label': '最低殖利率 (%)',
+        'type': 'float',
+        'min': 2.0,
+        'max': 12.0,
+        'default': 6.0,
+        'step': 0.5,
+        'help': '最低現金股息殖利率',
+    },
+    'stop_loss': {
+        'label': '固定停損',
+        'type': 'float',
+        'min': 0.05,
+        'max': 0.25,
+        'default': 0.12,
+        'step': 0.01,
+        'help': '虧損超過此比例自動賣出',
+    },
+    'max_positions': {
+        'label': '最大持股數',
+        'type': 'int',
+        'min': 5,
+        'max': 30,
+        'default': 15,
+        'help': '同時持有的最大股票數',
+    },
+}
+
 
 def run_value_dividend_strategy(api_token, params=None):
     """

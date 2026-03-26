@@ -8,6 +8,57 @@ pd.set_option('future.no_silent_downcasting', True)
 
 
 # ==========================================
+# PARAM_SCHEMA — UI 動態表單定義
+# ==========================================
+
+PARAM_SCHEMA = {
+    'trail_stop': {
+        'label': '追蹤停損',
+        'type': 'float',
+        'min': 0.05,
+        'max': 0.30,
+        'default': 0.18,
+        'step': 0.01,
+        'help': '跌破最高點多少比例時自動賣出',
+    },
+    'rsi_threshold': {
+        'label': 'RSI 超賣門檻',
+        'type': 'int',
+        'min': 15,
+        'max': 50,
+        'default': 28,
+        'help': 'RSI 低於此值觸發超賣信號',
+    },
+    'volume_mult': {
+        'label': '量能放大倍率',
+        'type': 'float',
+        'min': 1.0,
+        'max': 3.0,
+        'default': 1.5,
+        'step': 0.1,
+        'help': '突破日成交量須達均量的幾倍',
+    },
+    'supply_danger_pct': {
+        'label': '供給區安全距離',
+        'type': 'float',
+        'min': 0.90,
+        'max': 0.99,
+        'default': 0.97,
+        'step': 0.01,
+        'help': '價格距供給區頂部的安全比例',
+    },
+    'liq_min': {
+        'label': '流動性門檻 (股)',
+        'type': 'int',
+        'min': 100000,
+        'max': 2000000,
+        'default': 500000,
+        'help': '最低日均成交量',
+    },
+}
+
+
+# ==========================================
 # 工具函數 (來自正規化信號框架)
 # ==========================================
 
