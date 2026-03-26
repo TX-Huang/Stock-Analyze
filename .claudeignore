@@ -1,40 +1,45 @@
-# Embedded Python runtime (very large, not relevant to code changes)
-python_embed/
+# ============================================================
+# AI Invest HQ — .claudeignore
+# 目標: 減少 Claude context token 消耗
+# 上次更新: 2026-03-26
+# ============================================================
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-
-# Git internals
-.git/
-
-# Pip installer (2MB+, not needed)
-get-pip.py
-
-# Data / Cache directories
-new_vip_db/
-.finlab/
-output/
-logs/
-
-# Log files
-*.log
-
-# Environment & secrets
-.env
-.streamlit/secrets.toml
-
-# IDE
-.vscode/
-.idea/
-
-# Build artifacts
+# === 1. Runtime & Build (最大節省) ===
+python_embed/           # 內嵌 Python runtime (~300MB)
+get-pip.py              # pip installer (2.1MB)
 *.egg-info/
 dist/
 build/
+Dockerfile
+docker-compose.yml
+installer/
 
-# gstack binary & build artifacts (578MB total — only SKILL.md needs to be readable)
+# === 2. Cache & Binary ===
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data/cache/             # V4.x 策略快取 pkl (~1.4MB)
+.finlab/                # FinLab 資料快取
+new_vip_db/
+output/
+logs/
+
+# === 3. Log files (65MB+) ===
+*.log
+
+# === 4. Git ===
+.git/
+
+# === 5. Secrets & Environment ===
+.env
+.streamlit/secrets.toml
+
+# === 6. IDE ===
+.vscode/
+.idea/
+
+# === 7. gstack (只保留 SKILL.md 可讀) ===
 .claude/skills/gstack/browse/
 .claude/skills/gstack/bin/
 .claude/skills/gstack/node_modules/
@@ -42,27 +47,126 @@ build/
 .claude/skills/gstack/scripts/
 .claude/skills/gstack/.git/
 .claude/skills/browse/
-
-# gstack local state
 .gstack/
 
-# Root-level result/stats JSON files (test artifacts, not source code)
+# === 8. 獨立子專案 ===
+sj-trading/             # 永豐交易模組 (separate project)
+
+# === 9. 實驗結果 JSON (一次性產出，不是原始碼) ===
+# Root-level (4MB+ WFO results)
 *_result.json
 *_stats.json
 cross_comparison.json
+monte_carlo_result.json
 
-# Additional large files
+# data/ 內的分析結果 JSON (只讀不改)
+data/isaac_full_report.json         # 900KB 回測完整報告
+data/optimization_v2_results.json
+data/optimization_v3_results.json
+data/strategy_analytics_full.json
+data/strategy_baselines.json
+data/portfolio_analysis.json
+data/isaac_experiments.json
+data/p0_backtest_results.json
+data/p1_backtest_results.json
+
+# === 10. 已完成的實驗腳本 (歷史參考，不再修改) ===
+scripts/experiments/    # V3.7 時期的實驗 (~86KB)
+scripts/wfo.py          # WFO 腳本 (27KB, 已完成)
+scripts/backtest_comparison.py
+scripts/strategy_baseline.py
+scripts/strategy_optimization_v2.py
+scripts/strategy_optimization_v3.py
+scripts/p0_backtest_comparison.py
+scripts/p1_backtest_comparison.py
+scripts/p2_backtest.py
+scripts/isaac_experiments.py
+scripts/portfolio_analysis.py
+
+# === 11. 不常修改的 UI 頁面 ===
+ui/glossary.py          # 術語表 (36KB, 純靜態內容)
+ui/pages/live_monitor.py    # 即時監控 (45KB)
+ui/pages/war_room.py        # 戰情室 (38KB)
+ui/pages/auto_trading.py    # 自動交易 (23KB)
+ui/pages/alerts.py          # 警報 (20KB)
+ui/pages/leverage.py        # 槓桿分析 (18KB)
+ui/pages/monte_carlo_panel.py  # Monte Carlo (15KB)
+ui/pages/calendar.py        # 行事曆 (11KB)
+ui/pages/heatmap.py         # 熱力圖 (5KB)
+ui/pages/portfolio.py       # 投組 (7KB)
+ui/pages/watchlist.py       # 自選股 (12KB)
+ui/pages/journal.py         # 交易日誌 (5KB)
+ui/pages/trading.py         # 交易 (9KB)
+ui/pages/lab.py             # 實驗室 (1.6KB)
+ui/pages/review.py          # 回顧 (1KB)
+ui/pages/research.py        # 研究 (1.4KB)
+
+# === 12. 不常修改的分析模組 ===
+analysis/ai_core.py         # Gemini AI 整合
+analysis/ai_portfolio.py    # AI 投組分析
+analysis/ai_strategy.py     # AI 策略分析
+analysis/breakout.py        # 突破分析 (19KB)
+analysis/leverage.py        # 槓桿 ETF (15KB)
+analysis/thesis.py          # 投資論文 (17KB)
+analysis/stock_report.py    # 個股報告 (21KB)
+analysis/backtest_logger.py # 回測日誌 (14KB)
+analysis/cost_analysis.py   # 成本分析 (12KB)
+analysis/risk_calc.py       # 風險計算 (13KB)
+analysis/trade_analytics.py # 交易分析 (16KB)
+analysis/patterns.py        # 型態辨識 (8KB)
+analysis/chip.py            # 籌碼分析 (8KB)
+analysis/sensitivity.py     # 敏感度分析 (5KB)
+analysis/correlation.py     # 相關性 (4KB)
+analysis/attribution.py     # 歸因分析 (3.5KB)
+analysis/liquidity.py       # 流動性 (3.6KB)
+analysis/decay.py           # 衰減分析 (3.7KB)
+analysis/monte_carlo.py     # Monte Carlo (6KB)
+
+# === 13. 不常修改的策略 ===
+strategies/wfo.py           # WFO 策略 (23KB)
+strategies/candlestick.py   # K線策略 (12KB)
+strategies/elder.py         # Elder 策略 (12KB)
+strategies/edwards_magee.py # E&M 策略 (11KB)
+strategies/minervini.py     # Minervini 策略 (12KB)
+strategies/momentum.py      # 動量策略 (13KB)
+strategies/long_short.py    # 多空策略 (4KB)
+strategies/template.py      # 策略模板 (2KB)
+
+# === 14. 不常修改的其他模組 ===
+data/paper_trader.py        # 模擬交易 (26KB)
+data/auto_trader.py         # 自動交易 (27KB)
+data/risk_monitor.py        # 風險監控 (15KB)
+data/daily_recommender.py   # 每日推薦 (12KB)
+data/signal_format.py       # 信號格式 (7.5KB)
+bot/handlers.py             # Telegram Bot handlers (18KB)
+scheduler.py                # 排程器 (14KB)
+ui/stock_profile.py         # 個股頁面 (21KB)
+ui/theme.py                 # 主題 (14KB)
+ui/components.py            # 組件 (15KB)
+
+# === 15. 其他 ===
 SYSTEM_AUDIT_REPORT.md
+assets/                     # 空目錄
 
-# Test cache
-.pytest_cache/
-
-# Trading module (separate project)
-sj-trading/
-
-# Docker
-Dockerfile
-docker-compose.yml
-
-# Installer
-installer/
+# === 16. 小型 config/data (保留，不排除) ===
+# config/settings.py — 保留 (常改)
+# config/i18n.py — 保留
+# data/provider.py — 保留 (核心)
+# data/scanner.py — 保留
+# analysis/regime.py — 保留 (核心)
+# analysis/indicators.py — 保留 (核心)
+# analysis/trend.py — 保留 (核心)
+# strategies/isaac.py — 保留 (主力策略)
+# strategies/isaac_v4*.py — 保留 (V4.x 策略)
+# strategies/mean_reversion.py — 保留 (活躍)
+# strategies/value_dividend.py — 保留 (活躍)
+# strategies/pairs_trading.py — 保留 (活躍)
+# strategies/will_vcp.py — 保留 (活躍)
+# strategies/vcp.py — 保留 (活躍)
+# ui/backtest_dashboard.py — 保留 (常改)
+# ui/pages/backtest.py — 保留 (常改)
+# ui/pages/comparison.py — 保留 (常改)
+# ui/pages/dashboard.py — 保留 (常改)
+# ui/charts.py — 保留 (常改)
+# tests/ — 保留 (需要可見)
+# app.py — 保留 (入口)
