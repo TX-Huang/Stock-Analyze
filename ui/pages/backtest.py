@@ -30,7 +30,6 @@ def render(_embedded=False):
 
     # --- Strategy Config ---
     PRESET_STRATEGIES = {
-        "純做多策略 (Long Only)": ("strategies.long_only", "run_long_strategy"),
         "多空策略 (Long + Short)": ("strategies.long_short", "run_long_short_strategy"),
         "VCP 波動收縮策略 (Minervini)": ("strategies.vcp", "run_vcp_strategy"),
         "Isaac 頂級多因子策略 (V3.7)": ("strategies.isaac", "run_isaac_strategy"),
@@ -257,6 +256,10 @@ def render(_embedded=False):
                         func = getattr(strat, func_name)
                         import inspect
                         sig = inspect.signature(func)
+                        has_kwargs = any(
+                            p.kind == inspect.Parameter.VAR_KEYWORD
+                            for p in sig.parameters.values()
+                        )
                         if 'sim_start' in sig.parameters:
                             # Isaac V3.9 style — uses sim_start/sim_end for date slicing
                             report = func(finlab_token, params=run_params,
@@ -264,6 +267,9 @@ def render(_embedded=False):
                                          sim_end=str(sim_end_date))
                         elif 'params' in sig.parameters:
                             report = func(finlab_token, params=run_params)
+                        elif has_kwargs:
+                            # V4.x style — **kwargs forwarded as params
+                            report = func(finlab_token, **run_params)
                         else:
                             report = func(finlab_token)
 
