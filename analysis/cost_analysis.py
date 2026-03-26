@@ -85,7 +85,8 @@ def _estimate_trade_cost(
 
 # ─── Main Analysis ───
 
-def analyze_trading_costs(trades_df, capital=DEFAULT_CAPITAL_PER_TRADE):
+def analyze_trading_costs(trades_df, capital=DEFAULT_CAPITAL_PER_TRADE,
+                          commission_rate=None, tax_rate=None, slippage_rate=None):
     """
     Analyze trading costs from a DataFrame of closed trades.
 
@@ -166,7 +167,14 @@ def analyze_trading_costs(trades_df, capital=DEFAULT_CAPITAL_PER_TRADE):
         entry_p = float(row.get('entry_price', DEFAULT_CAPITAL_PER_TRADE))
         exit_p = float(row.get('exit_price', entry_p))
 
-        cost = _estimate_trade_cost(entry_p, exit_p, capital=capital)
+        _cost_kwargs = dict(capital=capital)
+        if commission_rate is not None:
+            _cost_kwargs['commission_rate'] = commission_rate
+        if tax_rate is not None:
+            _cost_kwargs['tax_rate'] = tax_rate
+        if slippage_rate is not None:
+            _cost_kwargs['slippage_rate'] = slippage_rate
+        cost = _estimate_trade_cost(entry_p, exit_p, **_cost_kwargs)
         cost['stock_id'] = row.get('stock_id', 'N/A')
         cost['entry_date'] = str(row.get('entry_date', ''))
         cost['holding_days'] = float(row.get('holding_days', 0))

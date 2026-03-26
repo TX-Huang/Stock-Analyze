@@ -45,20 +45,27 @@ def render(_embedded=False):
     # 從 session_state 取得 finlab_token（由 app.py 從 secrets.toml 載入）
     finlab_token = st.session_state.get('finlab_token', '')
 
-    with st.expander("策略設定", expanded=True):
+    # ── Read preset defaults (if a preset was just loaded) ──
+    _pa = st.session_state.pop('_preset_applied', None)
+    _def_capital = _pa['capital'] if _pa else 2_000_000
+    _def_mode_idx = 1 if (_pa and _pa.get('mode') == 'dca') else 0
+    _def_dca = _pa['dca_monthly'] if _pa else 50_000
+    _def_start = date.fromisoformat(_pa['start_date']) if (_pa and _pa.get('start_date')) else date(2015, 1, 1)
+    _def_end = date.fromisoformat(_pa['end_date']) if (_pa and _pa.get('end_date')) else date.today()
+    _def_cost = _pa.get('cost_params', {}) if _pa else {}
+
+    from analysis.cost_analysis import COMMISSION_RATE_DISCOUNTED, TAX_RATE_STOCK, SLIPPAGE_PER_SIDE
+
+    # ── Three-column settings layout ──
+    col_strategy, col_invest, col_params = st.columns([1, 2, 1.5])
+
+    with col_strategy:
+        st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:0 0 4px; font-weight:600;">── 策略選擇 ──</div>', unsafe_allow_html=True)
         all_options = list(PRESET_STRATEGIES.keys()) + ["📂 上傳自訂策略"]
         strategy_type = st.selectbox("選擇策略", all_options)
 
-        # ── 投資設定 ──
-        # Read preset defaults (if a preset was just loaded)
-        _pa = st.session_state.pop('_preset_applied', None)
-        _def_capital = _pa['capital'] if _pa else 2_000_000
-        _def_mode_idx = 1 if (_pa and _pa.get('mode') == 'dca') else 0
-        _def_dca = _pa['dca_monthly'] if _pa else 50_000
-        _def_start = date.fromisoformat(_pa['start_date']) if (_pa and _pa.get('start_date')) else date(2015, 1, 1)
-        _def_end = date.fromisoformat(_pa['end_date']) if (_pa and _pa.get('end_date')) else date.today()
-
-        st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:12px 0 4px; font-weight:600;">── 投資設定 ──</div>', unsafe_allow_html=True)
+    with col_invest:
+        st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:0 0 4px; font-weight:600;">── 投資設定 ──</div>', unsafe_allow_html=True)
         capital = st.slider("投資金額 (NT$)", min_value=100_000, max_value=50_000_000,
                            value=_def_capital, step=100_000, format="NT$ %d",
                            help="投入的初始資金")
@@ -78,119 +85,146 @@ def render(_embedded=False):
             sim_end_date = st.date_input("結束日期", value=_def_end,
                                          max_value=date.today())
 
-        # ── 策略參數 (動態 PARAM_SCHEMA) ──
+        # ── 進階成本設定 ──
+        with st.expander("進階成本設定", expanded=False):
+            cost_commission = st.slider(
+                "實際手續費率 (%)", min_value=0.010, max_value=0.1425,
+                value=_def_cost.get('commission_rate', COMMISSION_RATE_DISCOUNTED * 100) if _def_cost else COMMISSION_RATE_DISCOUNTED * 100,
+                step=0.005, format="%.3f%%",
+                help="買賣各一次，原價 0.1425%，券商折扣後約 0.050%",
+                key="cost_commission")
+            cost_tax = st.slider(
+                "證交稅率 (%)", min_value=0.0, max_value=1.0,
+                value=_def_cost.get('tax_rate', TAX_RATE_STOCK * 100) if _def_cost else TAX_RATE_STOCK * 100,
+                step=0.01, format="%.2f%%",
+                help="賣出時課徵，一般股票 0.3%，ETF 0.1%",
+                key="cost_tax")
+            cost_slippage = st.slider(
+                "滑價估計 (%)", min_value=0.0, max_value=0.5,
+                value=_def_cost.get('slippage_rate', SLIPPAGE_PER_SIDE * 100) if _def_cost else SLIPPAGE_PER_SIDE * 100,
+                step=0.01, format="%.2f%%",
+                help="買賣價差造成的隱含成本",
+                key="cost_slippage")
+
+    with col_params:
+        st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:0 0 4px; font-weight:600;">── 策略參數 ──</div>', unsafe_allow_html=True)
         strategy_params = {}
         if strategy_type != "📂 上傳自訂策略" and strategy_type in PRESET_STRATEGIES:
             strategy_params = _render_param_schema(strategy_type, PRESET_STRATEGIES)
 
-        # ── Preset 儲存/載入 ──
-        _render_preset_ui(strategy_type, capital, invest_mode, dca_monthly,
-                         sim_start_date, sim_end_date, strategy_params)
+    # ── Preset 儲存/載入 (below three columns) ──
+    cost_params = {
+        'commission_rate': cost_commission,
+        'tax_rate': cost_tax,
+        'slippage_rate': cost_slippage,
+    }
+    _render_preset_ui(strategy_type, capital, invest_mode, dca_monthly,
+                     sim_start_date, sim_end_date, strategy_params, cost_params)
 
-        # Custom strategy upload
-        uploaded_file = None
-        upload_valid = False
-        if strategy_type == "📂 上傳自訂策略":
-            u_c1, u_c2 = st.columns([3, 1])
-            with u_c1:
-                uploaded_file = st.file_uploader("上傳策略檔案 (.py)，需包含 `run_strategy(api_token)` 函式", type=["py"])
-            with u_c2:
+    # Custom strategy upload
+    uploaded_file = None
+    upload_valid = False
+    if strategy_type == "📂 上傳自訂策略":
+        u_c1, u_c2 = st.columns([3, 1])
+        with u_c1:
+            uploaded_file = st.file_uploader("上傳策略檔案 (.py)，需包含 `run_strategy(api_token)` 函式", type=["py"])
+        with u_c2:
+            try:
+                template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "strategies", "template.py")
+                with open(template_path, "rb") as f:
+                    st.download_button("📥 策略範本", f, file_name="template_strategy.py", mime="text/x-python", use_container_width=True)
+            except Exception:
+                pass
+
+        # --- Upload format check ---
+        if uploaded_file is not None:
+            import ast
+            source_bytes = uploaded_file.getvalue()
+            issues = []
+
+            # 1. Encoding check
+            try:
+                source_code = source_bytes.decode('utf-8')
+            except UnicodeDecodeError:
                 try:
-                    template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "strategies", "template.py")
-                    with open(template_path, "rb") as f:
-                        st.download_button("📥 策略範本", f, file_name="template_strategy.py", mime="text/x-python", use_container_width=True)
+                    source_code = source_bytes.decode('utf-8-sig')
                 except Exception:
-                    pass
+                    source_code = None
+                    issues.append("❌ **編碼錯誤** — 檔案非 UTF-8 編碼，請確認儲存格式。")
 
-            # --- Upload format check ---
-            if uploaded_file is not None:
-                import ast
-                source_bytes = uploaded_file.getvalue()
-                issues = []
-
-                # 1. Encoding check
+            # 2. Syntax check
+            tree = None
+            if source_code is not None:
                 try:
-                    source_code = source_bytes.decode('utf-8')
-                except UnicodeDecodeError:
-                    try:
-                        source_code = source_bytes.decode('utf-8-sig')
-                    except Exception:
-                        source_code = None
-                        issues.append("❌ **編碼錯誤** — 檔案非 UTF-8 編碼，請確認儲存格式。")
+                    tree = ast.parse(source_code)
+                except SyntaxError as e:
+                    issues.append(f"❌ **語法錯誤** (第 {e.lineno} 行) — `{e.msg}`")
 
-                # 2. Syntax check
-                tree = None
-                if source_code is not None:
-                    try:
-                        tree = ast.parse(source_code)
-                    except SyntaxError as e:
-                        issues.append(f"❌ **語法錯誤** (第 {e.lineno} 行) — `{e.msg}`")
-
-                # 3. Required function check
-                if tree is not None:
-                    func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
-                    if 'run_strategy' not in func_names:
-                        issues.append("❌ **缺少入口函式** — 找不到 `def run_strategy(...):`，平台需要此函式作為回測入口。")
-                    else:
-                        for node in ast.walk(tree):
-                            if isinstance(node, ast.FunctionDef) and node.name == 'run_strategy':
-                                args = [a.arg for a in node.args.args]
-                                if len(args) == 0:
-                                    issues.append("⚠️ **參數不足** — `run_strategy()` 需要至少一個參數 `api_token`，平台會自動傳入 Finlab Token。")
-                                has_return = any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(node))
-                                if not has_return:
-                                    issues.append("⚠️ **缺少回傳值** — `run_strategy()` 應回傳 Finlab 回測報告物件 (report)。")
-                                stress_params = {'stop_loss', 'take_profit'}
-                                has_stress = stress_params.issubset(set(args))
-                                has_kwargs = node.args.kwarg is not None
-                                st.session_state['_upload_supports_stress'] = has_stress or has_kwargs
-                                break
-
-                # 4. Key component check
-                if source_code is not None:
-                    warnings = []
-                    if 'finlab' not in source_code and 'backtest' not in source_code:
-                        warnings.append("⚠️ **未使用 Finlab** — 未偵測到 `finlab` 或 `backtest` 相關程式碼，回測可能無法產生報告。")
-                    if 'position' not in source_code.lower():
-                        warnings.append("⚠️ **未建立部位** — 未偵測到 `position` 變數，策略需要建立持倉矩陣。")
-                    if 'backtest.sim' not in source_code and 'safe_finlab_sim' not in source_code:
-                        warnings.append("⚠️ **未執行回測** — 未偵測到 `backtest.sim()` 或 `safe_finlab_sim()` 呼叫。")
-                    if 'from data_provider' in source_code:
-                        warnings.append("⚠️ **import 路徑錯誤** — `from data_provider` 應改為 `from data.provider`。")
-                    if "method='ffill'" in source_code and '.reindex(' in source_code:
-                        warnings.append("⚠️ **已棄用 API** — `.reindex(method='ffill')` 在 Pandas 2.1+ 已移除，請改用 `.reindex(...).ffill()`。")
-                    issues.extend(warnings)
-
-                # 5. Show check results
-                if not issues:
-                    upload_valid = True
-                    supports_stress = st.session_state.get('_upload_supports_stress', False)
-                    stress_info = "✅ 支援壓力測試" if supports_stress else "ℹ️ 不支援壓力測試（如需支援，請加入 <code>stop_loss</code> 和 <code>take_profit</code> 參數）"
-                    st.markdown(f"""
-                    <div class="alert-card alert-ok">
-                        <div class="alert-title">✅ 格式檢查通過</div>
-                        <div class="alert-body">
-                            檔案 <strong>{uploaded_file.name}</strong> 格式正確，包含 <code>run_strategy()</code> 入口函式，可以執行回測。<br>
-                            <span style="font-size:0.8rem; color:#64748b;">{stress_info}</span>
-                        </div>
-                    </div>""", unsafe_allow_html=True)
+            # 3. Required function check
+            if tree is not None:
+                func_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+                if 'run_strategy' not in func_names:
+                    issues.append("❌ **缺少入口函式** — 找不到 `def run_strategy(...):`，平台需要此函式作為回測入口。")
                 else:
-                    has_critical = any(issue.startswith("❌") for issue in issues)
-                    upload_valid = not has_critical
-                    alert_type = "alert-danger" if has_critical else "alert-warn"
-                    title = "格式檢查未通過" if has_critical else "格式檢查警告"
-                    items_html = "".join(f"<div style='margin:4px 0;'>{issue}</div>" for issue in issues)
-                    st.markdown(f"""
-                    <div class="alert-card {alert_type}">
-                        <div class="alert-title">{'❌' if has_critical else '⚠️'} {title} — {uploaded_file.name}</div>
-                        <div class="alert-body">{items_html}</div>
-                    </div>""", unsafe_allow_html=True)
-                    if has_critical:
-                        st.markdown("""<div style="padding:8px 12px; background:#1e293b; border-radius:6px; margin-top:8px; font-size:0.8rem; color:#64748b;">
-                            💡 <strong>提示</strong>：請下載「策略範本」參考正確格式，確保包含 <code>def run_strategy(api_token):</code> 函式並回傳 Finlab 回測報告。
-                        </div>""", unsafe_allow_html=True)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.FunctionDef) and node.name == 'run_strategy':
+                            args = [a.arg for a in node.args.args]
+                            if len(args) == 0:
+                                issues.append("⚠️ **參數不足** — `run_strategy()` 需要至少一個參數 `api_token`，平台會自動傳入 Finlab Token。")
+                            has_return = any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(node))
+                            if not has_return:
+                                issues.append("⚠️ **缺少回傳值** — `run_strategy()` 應回傳 Finlab 回測報告物件 (report)。")
+                            stress_params = {'stop_loss', 'take_profit'}
+                            has_stress = stress_params.issubset(set(args))
+                            has_kwargs = node.args.kwarg is not None
+                            st.session_state['_upload_supports_stress'] = has_stress or has_kwargs
+                            break
 
-        run_btn = st.button("🔬 執行回測", use_container_width=True, type="primary")
+            # 4. Key component check
+            if source_code is not None:
+                warnings = []
+                if 'finlab' not in source_code and 'backtest' not in source_code:
+                    warnings.append("⚠️ **未使用 Finlab** — 未偵測到 `finlab` 或 `backtest` 相關程式碼，回測可能無法產生報告。")
+                if 'position' not in source_code.lower():
+                    warnings.append("⚠️ **未建立部位** — 未偵測到 `position` 變數，策略需要建立持倉矩陣。")
+                if 'backtest.sim' not in source_code and 'safe_finlab_sim' not in source_code:
+                    warnings.append("⚠️ **未執行回測** — 未偵測到 `backtest.sim()` 或 `safe_finlab_sim()` 呼叫。")
+                if 'from data_provider' in source_code:
+                    warnings.append("⚠️ **import 路徑錯誤** — `from data_provider` 應改為 `from data.provider`。")
+                if "method='ffill'" in source_code and '.reindex(' in source_code:
+                    warnings.append("⚠️ **已棄用 API** — `.reindex(method='ffill')` 在 Pandas 2.1+ 已移除，請改用 `.reindex(...).ffill()`。")
+                issues.extend(warnings)
+
+            # 5. Show check results
+            if not issues:
+                upload_valid = True
+                supports_stress = st.session_state.get('_upload_supports_stress', False)
+                stress_info = "✅ 支援壓力測試" if supports_stress else "ℹ️ 不支援壓力測試（如需支援，請加入 <code>stop_loss</code> 和 <code>take_profit</code> 參數）"
+                st.markdown(f"""
+                <div class="alert-card alert-ok">
+                    <div class="alert-title">✅ 格式檢查通過</div>
+                    <div class="alert-body">
+                        檔案 <strong>{uploaded_file.name}</strong> 格式正確，包含 <code>run_strategy()</code> 入口函式，可以執行回測。<br>
+                        <span style="font-size:0.8rem; color:#64748b;">{stress_info}</span>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                has_critical = any(issue.startswith("❌") for issue in issues)
+                upload_valid = not has_critical
+                alert_type = "alert-danger" if has_critical else "alert-warn"
+                title = "格式檢查未通過" if has_critical else "格式檢查警告"
+                items_html = "".join(f"<div style='margin:4px 0;'>{issue}</div>" for issue in issues)
+                st.markdown(f"""
+                <div class="alert-card {alert_type}">
+                    <div class="alert-title">{'❌' if has_critical else '⚠️'} {title} — {uploaded_file.name}</div>
+                    <div class="alert-body">{items_html}</div>
+                </div>""", unsafe_allow_html=True)
+                if has_critical:
+                    st.markdown("""<div style="padding:8px 12px; background:#1e293b; border-radius:6px; margin-top:8px; font-size:0.8rem; color:#64748b;">
+                        💡 <strong>提示</strong>：請下載「策略範本」參考正確格式，確保包含 <code>def run_strategy(api_token):</code> 函式並回傳 Finlab 回測報告。
+                    </div>""", unsafe_allow_html=True)
+
+    run_btn = st.button("🔬 執行回測", use_container_width=True, type="primary")
 
     # --- Execute Backtest ---
     if run_btn:
@@ -287,6 +321,7 @@ def render(_embedded=False):
                         'start_date': str(sim_start_date),
                         'end_date': str(sim_end_date),
                         'params': strategy_params,
+                        'cost_params': cost_params,
                     }
 
                     st.session_state.backtest_results[run_label] = {
@@ -597,9 +632,26 @@ def render(_embedded=False):
         # ------ TAB: Trading Cost ------
         with tab_cost:
             try:
-                from analysis.cost_analysis import analyze_trading_costs, render_cost_chart, render_cost_over_time
+                from analysis.cost_analysis import analyze_trading_costs, render_cost_chart, render_cost_over_time, COMMISSION_RATE_DISCOUNTED as _DEF_COMM, TAX_RATE_STOCK as _DEF_TAX, SLIPPAGE_PER_SIDE as _DEF_SLIP
 
-                cost_data = analyze_trading_costs(trades)
+                # Pass custom fee rates from session
+                _sim = st.session_state.get('sim_settings', {})
+                _cp = _sim.get('cost_params', {})
+                _custom_comm = _cp.get('commission_rate', _DEF_COMM * 100)
+                _custom_tax = _cp.get('tax_rate', _DEF_TAX * 100)
+                _custom_slip = _cp.get('slippage_rate', _DEF_SLIP * 100)
+                _is_custom = (abs(_custom_comm - _DEF_COMM * 100) > 0.001 or
+                              abs(_custom_tax - _DEF_TAX * 100) > 0.001 or
+                              abs(_custom_slip - _DEF_SLIP * 100) > 0.001)
+                if _is_custom:
+                    st.markdown(f'<div style="color:#f59e0b; font-size:0.75rem; margin-bottom:8px;">📌 使用自訂費率：手續費 {_custom_comm:.3f}% / 稅 {_custom_tax:.2f}% / 滑價 {_custom_slip:.2f}%</div>', unsafe_allow_html=True)
+
+                cost_data = analyze_trading_costs(
+                    trades,
+                    commission_rate=_custom_comm / 100,
+                    tax_rate=_custom_tax / 100,
+                    slippage_rate=_custom_slip / 100,
+                )
 
                 # KPI strip
                 cyber_kpi_strip([
@@ -788,8 +840,6 @@ def _render_param_schema(strategy_type, preset_strategies):
         st.info("此策略不支援參數調整")
         return {}
 
-    st.markdown('<div style="color:#64748b; font-size:0.75rem; margin:12px 0 4px; font-weight:600;">── 策略參數 ──</div>', unsafe_allow_html=True)
-
     params = {}
     for key, spec in schema.items():
         param_type = spec.get('type', 'float')
@@ -822,7 +872,7 @@ def _render_param_schema(strategy_type, preset_strategies):
 
 
 def _render_preset_ui(strategy_type, capital, invest_mode, dca_monthly,
-                      start_date, end_date, strategy_params):
+                      start_date, end_date, strategy_params, cost_params=None):
     """渲染 Preset 儲存/載入 UI。"""
     presets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                                'data', 'presets')
@@ -868,12 +918,12 @@ def _render_preset_ui(strategy_type, capital, invest_mode, dca_monthly,
             else:
                 _save_preset(presets_dir, preset_name, strategy_type,
                             capital, invest_mode, dca_monthly,
-                            start_date, end_date, strategy_params)
+                            start_date, end_date, strategy_params, cost_params)
                 st.toast(f"✅ 已儲存設定檔「{preset_name}」", icon="✅")
 
 
 def _save_preset(presets_dir, name, strategy, capital, mode, dca_monthly,
-                 start_date, end_date, params):
+                 start_date, end_date, params, cost_params=None):
     """儲存 preset JSON 檔案。"""
     preset = {
         "name": name,
@@ -887,6 +937,7 @@ def _save_preset(presets_dir, name, strategy, capital, mode, dca_monthly,
             "dca_monthly": dca_monthly,
         },
         "params": params,
+        "cost_params": cost_params or {},
     }
     # Sanitize filename
     safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
@@ -905,6 +956,7 @@ def _apply_preset(pdata):
         'start_date': settings.get('start_date'),
         'end_date': settings.get('end_date'),
         'params': pdata.get('params', {}),
+        'cost_params': pdata.get('cost_params', {}),
     }
     st.toast(f"✅ 已載入設定檔「{pdata.get('name', '')}」", icon="✅")
 
