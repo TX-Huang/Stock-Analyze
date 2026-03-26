@@ -363,6 +363,84 @@ def format_optimization_diff(before_stats, after_stats, change_desc=""):
     return msg.strip()
 
 
+_REGIME_ZH = {
+    'strong_bull': '強多頭 🟢',
+    'weak_bull': '弱多頭 🟡',
+    'sideways': '盤整 ⚪',
+    'weak_bear': '弱空頭 🟠',
+    'strong_bear': '強空頭 🔴',
+}
+
+
+def format_v4_daily_signals(result):
+    """
+    格式化 V4 每日信號為 Telegram 訊息。
+
+    Args:
+        result: daily_v4_scan 的輸出 dict
+
+    Returns:
+        str: Telegram Markdown 格式訊息
+    """
+    date = result.get('date', '')
+    regime = result.get('regime', 'unknown')
+    regime_label = _REGIME_ZH.get(regime, regime)
+    allocations = result.get('allocations', {})
+    variant_entries = result.get('variant_new_entries', {})
+    strategy_signals = result.get('strategy_signals', {})
+
+    lines = [f"📡 *V4 每日信號掃描*  `{date}`"]
+    lines.append(f"🌐 市場狀態: *{regime_label}*")
+    lines.append("")
+
+    # 各 variant 的配置
+    for vk in ['V4.0', 'V4.1', 'V4.2']:
+        alloc = allocations.get(vk, {})
+        weights = alloc.get('weights', {})
+        if not weights:
+            continue
+        w_str = ' | '.join(f"{k} {int(v*100)}%" for k, v in weights.items() if v > 0.01)
+        lines.append(f"*{vk}*: {w_str}")
+
+    lines.append("")
+
+    # 新進場股票（重點）
+    has_entries = False
+    for vk in ['V4.0', 'V4.1', 'V4.2']:
+        entries = variant_entries.get(vk, [])
+        if not entries:
+            continue
+        has_entries = True
+        lines.append(f"🆕 *{vk} 新進場:*")
+        for e in entries[:10]:
+            name = e.get('name', '')
+            ticker = e['ticker']
+            price = e.get('price', 0)
+            strat = e.get('strategy', '')
+            weight = e.get('weight', 0)
+            score = e.get('score', 0)
+            price_str = f"${price:,.1f}" if price else ""
+            lines.append(
+                f"  `{ticker}` {name} {price_str} "
+                f"(Score:{score}, {strat} {weight}%)"
+            )
+        lines.append("")
+
+    if not has_entries:
+        lines.append("✅ 今日無新進場信號")
+        lines.append("")
+
+    # 各子策略持倉概覽
+    lines.append("📊 *子策略持倉概覽:*")
+    for strat_name, sig in strategy_signals.items():
+        n_h = sig.get('n_holdings', 0)
+        n_in = sig.get('n_entered', 0)
+        n_out = sig.get('n_exited', 0)
+        lines.append(f"  {strat_name}: {n_h}檔 (+{n_in} -{n_out})")
+
+    return '\n'.join(lines)
+
+
 if __name__ == "__main__":
     # 測試用
     print("Testing Telegram notification...")

@@ -11,7 +11,7 @@ from ui.theme import _tw_color, _tw_color_pct, _tw_tag
 from utils.helpers import safe_json_read
 from config.paths import (
     PAPER_TRADE_PATH, SCAN_RESULTS_PATH, RECOMMENDATION_PATH,
-    ORDER_LOG_PATH, AUTO_TRADE_CONFIG_PATH,
+    ORDER_LOG_PATH, AUTO_TRADE_CONFIG_PATH, V4_SIGNALS_PATH,
 )
 
 logger = logging.getLogger(__name__)
@@ -177,6 +177,28 @@ def _load_calendar_events():
         return []
 
 
+_REGIME_ZH = {
+    'strong_bull': '強多頭', 'weak_bull': '弱多頭', 'sideways': '盤整',
+    'weak_bear': '弱空頭', 'strong_bear': '強空頭',
+}
+_REGIME_COLOR = {
+    'strong_bull': '#22c55e', 'weak_bull': '#84cc16', 'sideways': '#94a3b8',
+    'weak_bear': '#f59e0b', 'strong_bear': '#ef4444',
+}
+
+
+def _load_v4_signals():
+    """Load V4 daily scan signals."""
+    try:
+        data = safe_json_read(V4_SIGNALS_PATH, {})
+        if not data or not data.get('date'):
+            return None
+        return data
+    except Exception as e:
+        logger.warning(f"載入 V4 信號失敗: {e}")
+        return None
+
+
 def _load_pending_orders():
     """Load pending/today's orders from auto_trader order log."""
     try:
@@ -190,6 +212,132 @@ def _load_pending_orders():
     except (TypeError, KeyError, AttributeError) as e:
         logger.warning(f"載入委託記錄失敗: {e}")
         return [], []
+
+
+def _render_v4_signals(v4_data):
+    """Render V4 daily signal section."""
+    date = v4_data.get('date', '')
+    regime = v4_data.get('regime', 'unknown')
+    regime_label = _REGIME_ZH.get(regime, regime)
+    regime_color = _REGIME_COLOR.get(regime, '#94a3b8')
+    allocations = v4_data.get('allocations', {})
+    variant_entries = v4_data.get('variant_new_entries', {})
+    strategy_signals = v4_data.get('strategy_signals', {})
+
+    # Header with regime badge
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">'
+        f'<span style="font-size:1.1rem;font-weight:700;color:#e2e8f0">V4 每日信號</span>'
+        f'<span style="font-size:0.7rem;color:#64748b">{date}</span>'
+        f'<span style="background:{regime_color};color:#0f172a;padding:2px 10px;'
+        f'border-radius:4px;font-size:0.7rem;font-weight:700">{regime_label}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Allocation overview (3 columns)
+    cols = st.columns(3)
+    for i, vk in enumerate(['V4.0', 'V4.1', 'V4.2']):
+        alloc = allocations.get(vk, {})
+        weights = alloc.get('weights', {})
+        with cols[i]:
+            st.markdown(
+                f'<div style="background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;'
+                f'border-left:3px solid #8b5cf6">'
+                f'<div style="font-size:0.75rem;color:#a78bfa;font-weight:700;margin-bottom:6px">{vk}</div>',
+                unsafe_allow_html=True,
+            )
+            if weights:
+                for sname, w in weights.items():
+                    if w > 0.01:
+                        bar_w = int(w * 100)
+                        st.markdown(
+                            f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'
+                            f'<span style="font-size:0.65rem;color:#cbd5e1;min-width:90px">{sname}</span>'
+                            f'<div style="flex:1;height:8px;background:rgba(255,255,255,0.05);border-radius:2px;overflow:hidden">'
+                            f'<div style="width:{bar_w}%;height:100%;background:#8b5cf6;border-radius:2px"></div></div>'
+                            f'<span style="font-size:0.65rem;color:#a78bfa;font-family:JetBrains Mono,monospace">{bar_w}%</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+            else:
+                st.markdown(
+                    '<span style="font-size:0.7rem;color:#475569">N/A</span>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # New entries table
+    all_entries = []
+    for vk in ['V4.0', 'V4.1', 'V4.2']:
+        for e in variant_entries.get(vk, []):
+            e['variant'] = vk
+            all_entries.append(e)
+
+    if all_entries:
+        # Deduplicate by ticker, keep all variant info
+        seen = {}
+        for e in all_entries:
+            t = e['ticker']
+            if t not in seen:
+                seen[t] = {**e, 'variants': [e['variant']]}
+            else:
+                if e['variant'] not in seen[t]['variants']:
+                    seen[t]['variants'].append(e['variant'])
+        unique_entries = sorted(seen.values(), key=lambda x: -x.get('score', 0))
+
+        st.markdown(
+            '<div style="margin-top:10px;font-size:0.85rem;font-weight:700;color:#f59e0b">'
+            '🆕 今日新進場信號</div>',
+            unsafe_allow_html=True,
+        )
+        headers = ['代碼', '名稱', '現價', 'Score', '策略', '出現版本']
+        rows = []
+        for e in unique_entries[:15]:
+            variants_str = ' '.join(
+                f'<span class="tag tag-bull" style="font-size:0.55rem">{v}</span>'
+                for v in e['variants']
+            )
+            price = e.get('price', 0)
+            rows.append([
+                f'<span style="font-family:JetBrains Mono,monospace;font-weight:700">{e["ticker"]}</span>',
+                e.get('name', '')[:6],
+                f'{price:,.1f}' if price else '—',
+                f'{e.get("score", 0):.1f}',
+                e.get('strategy', ''),
+                variants_str,
+            ])
+        cyber_table(headers, rows)
+    else:
+        st.markdown(
+            '<div style="margin-top:10px;padding:12px;background:rgba(0,0,0,0.15);'
+            'border-radius:8px;text-align:center;color:#64748b;font-size:0.8rem">'
+            '✅ 今日無新進場信號</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Sub-strategy summary (compact)
+    if strategy_signals:
+        st.markdown(
+            '<div style="margin-top:8px;display:flex;gap:12px;flex-wrap:wrap">',
+            unsafe_allow_html=True,
+        )
+        for sname, sig in strategy_signals.items():
+            n_h = sig.get('n_holdings', 0)
+            n_in = sig.get('n_entered', 0)
+            n_out = sig.get('n_exited', 0)
+            in_color = '#22c55e' if n_in > 0 else '#475569'
+            out_color = '#ef4444' if n_out > 0 else '#475569'
+            st.markdown(
+                f'<span style="font-size:0.65rem;color:#94a3b8;background:rgba(0,0,0,0.2);'
+                f'padding:3px 8px;border-radius:4px">'
+                f'{sname}: <b>{n_h}</b>檔 '
+                f'<span style="color:{in_color}">+{n_in}</span> '
+                f'<span style="color:{out_color}">-{n_out}</span>'
+                f'</span>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def render():
@@ -371,6 +519,12 @@ def render():
                 cyber_table(headers_sig, rows_sig)
             else:
                 st.caption("目前無突破信號")
+
+        # ── V4 Daily Signals ──
+        v4_data = _load_v4_signals()
+        if v4_data:
+            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+            _render_v4_signals(v4_data)
 
         # ── Risk Dashboard: Daily VaR + Performance Attribution ──
         if paper['positions']:

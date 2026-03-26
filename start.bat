@@ -18,13 +18,11 @@ exit /b 1
 :USE_EMBED
 echo  [OK] Using embedded Python
 set "PY=%ROOT%\python_embed\python.exe"
-set "ST=%ROOT%\python_embed\Scripts\streamlit.exe"
 if exist "%ROOT%\utils\fix_embed_pth.py" "%PY%" "%ROOT%\utils\fix_embed_pth.py" >nul 2>&1
 goto DEPS
 :USE_SYSTEM
 echo  [OK] Using system Python
 set "PY=python"
-set "ST=streamlit"
 goto DEPS
 :DEPS
 if not exist "%ROOT%\requirements.txt" goto KEYS
@@ -77,7 +75,7 @@ echo.
 echo  [*] Starting at http://localhost:8501
 echo  [*] Close this window to stop the server
 echo.
-"%ST%" run "%ROOT%\app.py" --server.port 8501 --server.headless false --browser.gatherUsageStats false
+"%PY%" -m streamlit run "%ROOT%\app.py" --server.port 8501 --server.headless false --browser.gatherUsageStats false
 
 :: Cleanup when user closes or Ctrl+C
 echo.
