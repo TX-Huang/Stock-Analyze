@@ -25,6 +25,9 @@ SLATE = "#94a3b8"
 # Built-in strategy registry: display_name -> (module_path, function_name)
 _BUILTIN_STRATEGIES = {
     "Isaac V3.7": ("strategies.isaac", "run_isaac_strategy"),
+    "Isaac V4.0": ("strategies.isaac_v4", "run_strategy"),
+    "Isaac V4.1 Razor": ("strategies.isaac_v4_razor", "run_strategy"),
+    "Isaac V4.2 Turbo": ("strategies.isaac_v4_turbo", "run_strategy"),
     "VCP": ("strategies.vcp", "run_vcp_strategy"),
     "Will VCP": ("strategies.will_vcp", "run_will_vcp_strategy"),
     "Minervini": ("strategies.minervini", "run_minervini_strategy"),

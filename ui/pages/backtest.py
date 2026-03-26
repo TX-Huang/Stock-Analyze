@@ -30,6 +30,9 @@ def render(_embedded=False):
         "多空策略 (Long + Short)": ("strategies.long_short", "run_long_short_strategy"),
         "VCP 波動收縮策略 (Minervini)": ("strategies.vcp", "run_vcp_strategy"),
         "Isaac 頂級多因子策略 (V3.7)": ("strategies.isaac", "run_isaac_strategy"),
+        "Isaac V4.0 Regime 動態配置": ("strategies.isaac_v4", "run_strategy"),
+        "Isaac V4.1 Razor 極簡配置": ("strategies.isaac_v4_razor", "run_strategy"),
+        "Isaac V4.2 Turbo 最大報酬": ("strategies.isaac_v4_turbo", "run_strategy"),
     }
 
     # 從 session_state 取得 finlab_token（由 app.py 從 secrets.toml 載入）
