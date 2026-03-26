@@ -9,7 +9,7 @@
 ; ==========================================
 
 #define MyAppName "全域量化終端"
-#define MyAppVersion "3.2.0"
+#define MyAppVersion "3.3.0"
 #define MyAppPublisher "AI Invest HQ"
 #define MyAppURL "https://github.com/TX-Huang/Stock-Analyze"
 #define MyAppExeName "start.bat"

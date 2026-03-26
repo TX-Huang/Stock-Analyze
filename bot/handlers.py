@@ -18,7 +18,10 @@ from telegram.ext import ContextTypes
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORTFOLIO_PATH = os.path.join(PROJECT_ROOT, 'data', 'portfolio.json')
 SECRETS_PATH = os.path.join(PROJECT_ROOT, '.streamlit', 'secrets.toml')
-CLAUDE_CLI = r'C:\Users\Dodo\.local\bin\claude.exe'
+CLAUDE_CLI = os.environ.get(
+    'CLAUDE_CLI',
+    os.path.join(os.path.expanduser('~'), '.local', 'bin', 'claude.exe'),
+)
 
 sys.path.insert(0, PROJECT_ROOT)
 

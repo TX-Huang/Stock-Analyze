@@ -1,8 +1,8 @@
 @echo off
-title AI Invest HQ v3.2.0
+title AI Invest HQ v3.3.0
 echo.
 echo  ========================================
-echo   AI Invest HQ v3.2.0
+echo   AI Invest HQ v3.3.0
 echo   Alpha Global Quant Trading Platform
 echo   Powered by Isaac V3.9 + Will VCP V2.0
 echo  ========================================
